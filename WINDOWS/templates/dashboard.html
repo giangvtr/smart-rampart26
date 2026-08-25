@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MuseumGuard - Live Dashboard</title>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body { font-family: system-ui, sans-serif; margin: 0; padding: 1.5rem 2rem;
+         background: #0f172a; color: #e2e8f0; }
+  header { display: flex; align-items: center; justify-content: space-between;
+           gap: 1rem; flex-wrap: wrap; margin-bottom: 1.25rem; }
+  h1 { margin: 0; font-size: 1.4rem; }
+  .sub { color: #94a3b8; font-size: .85rem; }
+  .auth { display: flex; gap: .4rem; align-items: center; }
+  input { font: inherit; padding: .4rem .6rem; border-radius: 8px;
+          border: 1px solid #334155; background: #1e293b; color: #e2e8f0; }
+  button { font: inherit; border: 0; border-radius: 8px; padding: .5rem .8rem;
+           cursor: pointer; font-weight: 600; }
+  .btn-login { background: #38bdf8; color: #052e16; }
+  .btn-off   { background: #ef4444; color: white; }
+  .btn-auto  { background: #22c55e; color: #052e16; }
+  .btn-arm   { background: #eab308; color: #1e1b04; }
+  .btn-reset { background: #f97316; color: #1e1b04; }
+  .btn-ghost { background: #334155; color: #e2e8f0; }
+  button:disabled { opacity: .4; cursor: not-allowed; }
+  .layout { display: grid; grid-template-columns: 1fr 320px; gap: 1.25rem; }
+  @media (max-width: 820px){ .layout { grid-template-columns: 1fr; } }
+  .grid { display: grid; gap: 1rem;
+          grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); }
+  .card { background: #1e293b; border-radius: 12px; padding: 1.1rem;
+          border: 2px solid #334155; transition: border-color .3s; }
+  .card.ok    { border-color: #22c55e; }
+  .card.warn  { border-color: #eab308; }
+  .card.alarm { border-color: #ef4444; animation: pulse 1s infinite; }
+  .card.disc  { border-color: #64748b; opacity: .55; }
+  @keyframes pulse { 50% { border-color: #7f1d1d; box-shadow: 0 0 0 3px #7f1d1d55; } }
+  .zone { font-weight: 700; font-size: 1.05rem; margin-bottom: .5rem;
+          display: flex; justify-content: space-between; align-items: center; gap:.5rem; }
+  .pill { font-size: .65rem; padding: .15rem .5rem; border-radius: 999px;
+          background: #334155; text-transform: uppercase; letter-spacing: .05em; white-space:nowrap; }
+  .pill.ok { background: #14532d; color: #86efac; }
+  .pill.warn { background: #713f12; color: #fde68a; }
+  .pill.alarm { background: #7f1d1d; color: #fca5a5; }
+  .pill.disc { background: #334155; color: #cbd5e1; }
+  .big { font-size: 2rem; font-weight: 800; margin: .2rem 0; }
+  .row { display: flex; gap: 1.25rem; margin: .4rem 0; }
+  .row .k { color: #94a3b8; font-size: .72rem; }
+  .row .v { font-size: 1.05rem; font-weight: 600; }
+  .bar { height: 10px; background: #334155; border-radius: 999px; overflow: hidden; margin: .5rem 0; }
+  .fill { height: 100%; background: linear-gradient(90deg,#38bdf8,#0ea5e9); transition: width .4s; }
+  .meta { color: #94a3b8; font-size: .78rem; line-height: 1.5; margin-top:.4rem; }
+  .actions { display:flex; gap:.4rem; flex-wrap:wrap; margin-top:.7rem; }
+  .actions button { flex: 1 1 auto; }
+  .empty { color: #94a3b8; }
+  aside { background: #1e293b; border: 1px solid #334155; border-radius: 12px;
+          padding: 1rem; max-height: 78vh; overflow: auto; }
+  aside h2 { font-size: .9rem; margin: 0 0 .6rem; color:#cbd5e1; }
+  .log li { list-style: none; font-size: .78rem; padding: .3rem 0;
+            border-bottom: 1px solid #273449; display:flex; gap:.5rem; }
+  .log { margin: 0; padding: 0; }
+  .log .t { color: #64748b; font-variant-numeric: tabular-nums; }
+  .log .z { color: #93c5fd; font-weight: 600; }
+  .k-alarm { color:#fca5a5; } .k-online{ color:#86efac; } .k-override{ color:#fde68a; }
+  .banner { background:#7f1d1d; color:#fecaca; padding:.5rem .8rem; border-radius:8px;
+            margin-bottom:1rem; font-weight:600; display:none; }
+</style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>&#128737; MuseumGuard &mdash; Live Dashboard</h1>
+      <div class="sub">Auto-refresh 2s &middot; readings in via POST, commands out on the same reply</div>
+    </div>
+    <div class="auth" id="auth"></div>
+  </header>
+
+  <div class="banner" id="banner"></div>
+
+  <div class="layout">
+    <div id="grid" class="grid"><div class="empty">Waiting for sensor data&hellip;</div></div>
+    <aside>
+      <h2>Event log</h2>
+      <ul class="log" id="log"><li class="empty">No events yet.</li></ul>
+    </aside>
+  </div>
+
+<script>
+let AGENT = null;
+
+function stateClass(s) {
+  s = (s || "").toUpperCase();
+  if (s === "ALARM") return "alarm";
+  if (s === "WARN" || s === "WARNING") return "warn";
+  if (s === "OK") return "ok";
+  return "";
+}
+
+async function refreshMe() {
+  try {
+    const r = await fetch("/api/me");
+    AGENT = (await r.json()).agent;
+  } catch { AGENT = null; }
+  renderAuth();
+}
+
+function renderAuth() {
+  const el = document.getElementById("auth");
+  if (AGENT) {
+    el.innerHTML = `<span class="sub">Logged in as <b>${AGENT}</b></span>
+      <button class="btn-ghost" onclick="logout()">Log out</button>`;
+  } else {
+    el.innerHTML = `
+      <input id="u" placeholder="user" size="8">
+      <input id="p" type="password" placeholder="pass" size="8">
+      <button class="btn-login" onclick="login()">Log in</button>`;
+  }
+}
+
+async function login() {
+  const user = document.getElementById("u").value;
+  const pass = document.getElementById("p").value;
+  const r = await fetch("/api/login", {
+    method:"POST", headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({ user, pass })
+  });
+  if (r.ok) { await refreshMe(); tick(); }
+  else alert("Invalid credentials");
+}
+async function logout() {
+  await fetch("/api/logout", { method:"POST" });
+  await refreshMe(); tick();
+}
+
+async function sendCommand(zone, cmd) {
+  const r = await fetch("/api/command", {
+    method:"POST", headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({ zone, cmd })
+  });
+  if (r.status === 401) { alert("Log in first to send commands."); return; }
+  tick();
+}
+
+function actionBtn(zone, cmd, cls, label) {
+  const dis = AGENT ? "" : "disabled title='log in to control'";
+  return `<button class="${cls}" ${dis} onclick="sendCommand('${zone}','${cmd}')">${label}</button>`;
+}
+
+function header(r, sc, discPill) {
+  const pill = discPill ? `<span class="pill disc">offline</span>`
+                        : `<span class="pill ${sc}">${(r.state ?? '-')}</span>`;
+  return `<div class="zone">${r.zone} ${pill}</div>`;
+}
+
+function envCard(r, disc, sc) {
+  const off = r.cmd === "OFF";
+  const ack = off
+    ? actionBtn(r.zone, "AUTO", "btn-auto", "Resume LED")
+    : actionBtn(r.zone, "OFF", "btn-off", "Acknowledge / LED off");
+  const light = r.light != null ? `<div><div class="k">Light</div><div class="v">${r.light}</div></div>` : "";
+  return `<div class="card ${disc?'disc':sc}">
+    ${header(r, sc, disc)}
+    <div class="big">${r.temp ?? '-'}&deg;C</div>
+    <div class="row">
+      <div><div class="k">Humidity</div><div class="v">${r.humidity ?? '-'}%</div></div>
+      ${r.air != null ? `<div><div class="k">Air</div><div class="v">${r.air}%</div></div>` : ""}
+      ${light}
+    </div>
+    <div class="meta">${disc ? '&#9888; disconnected' : 'last seen '+r.age_s+'s ago'} &middot; LED: ${r.cmd}</div>
+    <div class="actions">${ack}</div>
+  </div>`;
+}
+
+function waterCard(r, disc) {
+  const level = (r.level ?? 0);
+  const sc = r.latched ? "alarm" : stateClass(r.state);
+  return `<div class="card ${disc?'disc':sc}">
+    ${header({...r, state: r.latched ? 'ALARM' : r.state}, sc, disc)}
+    <div class="big">${level}%</div>
+    <div class="bar"><div class="fill" style="width:${Math.max(0,Math.min(100,level))}%"></div></div>
+    <div class="meta">raw: ${r.raw ?? '-'} &middot; ${r.voltage ?? '-'} V ${r.latched?'&middot; <b>LATCHED</b>':''}<br>
+      ${disc ? '&#9888; disconnected' : 'last seen '+r.age_s+'s ago'}</div>
+    <div class="actions">${actionBtn(r.zone, "RESET", "btn-reset", "Reset alarm")}</div>
+  </div>`;
+}
+
+function motionCard(r, disc) {
+  const armed = r.armed;
+  const sc = r.latched ? "alarm" : (armed ? "warn" : stateClass(r.state));
+  const stateLabel = r.latched ? "INTRUSION" : (armed ? "ARMED" : "DISARMED");
+  return `<div class="card ${disc?'disc':sc}">
+    ${header({...r, state: stateLabel}, sc, disc)}
+    <div class="big">${r.motion ? "&#128694; MOTION" : "&mdash;"}</div>
+    <div class="meta">${disc ? '&#9888; disconnected' : 'last seen '+r.age_s+'s ago'}
+      ${r.latched?'&middot; <b>LATCHED</b>':''}</div>
+    <div class="actions">
+      ${armed ? actionBtn(r.zone,"DISARM","btn-ghost","Disarm")
+              : actionBtn(r.zone,"ARM","btn-arm","Arm")}
+      ${actionBtn(r.zone, "RESET", "btn-reset", "Reset")}
+    </div>
+  </div>`;
+}
+
+function pickCard(r, disc) {
+  if (r.motion != null || r.armed != null) return motionCard(r, disc);
+  if (r.level != null || r.water != null || r.raw != null) return waterCard(r, disc);
+  return envCard(r, disc, stateClass(r.state));
+}
+
+async function tick() {
+  try {
+    const rows = await (await fetch("/api/readings")).json();
+    const grid = document.getElementById("grid");
+    if (!rows.length) {
+      grid.innerHTML = '<div class="empty">Waiting for sensor data&hellip;</div>';
+    } else {
+      grid.innerHTML = rows.map(r => pickCard(r, r.disconnected)).join("");
+    }
+    // Standing-alarm banner
+    const alarms = rows.filter(r => !r.disconnected &&
+      (r.latched || (r.state||"").toUpperCase()==="ALARM"));
+    const b = document.getElementById("banner");
+    if (alarms.length) {
+      b.style.display = "block";
+      b.textContent = "⚠ ALARM: " + alarms.map(a=>a.zone).join(", ");
+    } else b.style.display = "none";
+
+    const log = await (await fetch("/api/log")).json();
+    document.getElementById("log").innerHTML = log.length
+      ? log.map(e => `<li><span class="t">${e.ts_str}</span>
+          <span class="z">${e.zone}</span>
+          <span class="k-${e.kind}">${e.kind}</span>
+          <span>${e.detail}</span></li>`).join("")
+      : '<li class="empty">No events yet.</li>';
+  } catch (e) { /* keep trying */ }
+}
+
+refreshMe();
+tick();
+setInterval(tick, 2000);
+</script>
+</body>
+</html>
