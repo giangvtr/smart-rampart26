@@ -24,7 +24,7 @@
 // ---- config -----------------------------------------------------------------
 const char* WIFI_SSID = "Wokwi-GUEST";
 const char* WIFI_PASS = "";                                       // "" for Wokwi
-const char* SERVER    = "http://192.168.95.204:5000/api/ingest";  // server IP + port
+const char* SERVER    = "http://192.168.95.204:8000/api/ingest";  // server IP + port (dashboard defaults to :8000)
 const char* ZONE      = "GAL01";
 
 const unsigned long POST_INTERVAL = 2000;  // 2s heartbeat
@@ -117,9 +117,15 @@ void postReading(float temperature, float humidity, int airQuality, const char* 
     Serial.print("reply: ");
     Serial.println(reply);
     // Very small parser: look for "cmd":"..." in the JSON reply.
-    if (reply.indexOf("\"cmd\":\"OFF\"") >= 0) {
+    // The dashboard replies with one of AUTO / OFF / ARM / DISARM / RESET.
+    // For this environmental node, any "silence the alarm" command (OFF /
+    // DISARM / RESET) forces the LED off; ARM / AUTO returns to normal.
+    if (reply.indexOf("\"cmd\":\"OFF\"") >= 0 ||
+        reply.indexOf("\"cmd\":\"DISARM\"") >= 0 ||
+        reply.indexOf("\"cmd\":\"RESET\"") >= 0) {
       ledCommand = "OFF";
-    } else if (reply.indexOf("\"cmd\":\"AUTO\"") >= 0) {
+    } else if (reply.indexOf("\"cmd\":\"AUTO\"") >= 0 ||
+               reply.indexOf("\"cmd\":\"ARM\"") >= 0) {
       ledCommand = "AUTO";
     }
   }

@@ -20,7 +20,7 @@ from machine import ADC, Pin
 # ---- config -----------------------------------------------------------------
 WIFI_SSID = "Hotspot"
 WIFI_PASS = "hahahaha"       # hotspot password
-SERVER = "http://192.168.95.204:5000/api/ingest"   # <-- PC's IP on the hotspot + port
+SERVER = "http://192.168.95.204:8000/api/ingest"   # <-- PC's IP on the hotspot + port (dashboard defaults to :8000)
 ZONE = "GAL01"
 
 WATER_PIN = 26          # ADC0 on GP26
