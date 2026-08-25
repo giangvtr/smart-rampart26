@@ -44,26 +44,30 @@ from transports import HttpIngestSource, SerialSource, SimulatedSource  # noqa: 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 
 
-def make_source():
+def make_source(name: str = "http"):
     """The single swap-point for how data reaches the dashboard.
 
-    Default: HttpIngestSource -- the ESP32 zone nodes POST their readings to
-    /api/ingest over WiFi and pick up commands on the same reply. For a
-    no-hardware demo use SimulatedSource; for a serial (USB/Bluetooth-Classic)
-    Arduino use SerialSource (set the port in config.py).
+    Chosen at launch with --source (default "http"):
+
+      http   HttpIngestSource -- the real ESP32 path: nodes POST readings to
+             /api/ingest over WiFi and pick up commands on the same reply.
+      sim    SimulatedSource  -- fake data, no hardware (for a quick demo/test).
+      serial SerialSource     -- USB / Bluetooth-Classic Arduino (port in config.py).
     """
+    if name == "sim":
+        return SimulatedSource()
+    if name == "serial":
+        return SerialSource(port=config.SERIAL_PORT, baud=config.SERIAL_BAUD)
     return HttpIngestSource()
-    # return SimulatedSource()
-    # return SerialSource(port=config.SERIAL_PORT, baud=config.SERIAL_BAUD)
 
 
 # --------------------------------------------------------------------------
 # Hub: owns the source + storage, fans events out to connected browsers
 # --------------------------------------------------------------------------
 class Hub:
-    def __init__(self):
+    def __init__(self, source_name: str = "http"):
         self.storage = Storage()
-        self.source = make_source()
+        self.source = make_source(source_name)
         self.connected = False
         # New id per process. All server state (buffers, latches, tokens) lives
         # in memory, so a restart wipes it -- the browser compares this against
@@ -313,13 +317,16 @@ def main() -> int:
     # do not expose this beyond the demo machine without TLS in front of it.
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8000)
+    parser.add_argument("--source", choices=["http", "sim", "serial"], default="http",
+                        help="data source: http=ESP32 WiFi (default), "
+                             "sim=fake data no hardware, serial=USB/Bluetooth Arduino")
     args = parser.parse_args()
 
-    HUB = Hub()
+    HUB = Hub(args.source)
     HUB.start()
     httpd = ThreadingHTTPServer((args.host, args.port), Handler)
     httpd.daemon_threads = True
-    print(f"{config.APP_NAME} web dashboard -> http://{args.host}:{args.port}")
+    print(f"{config.APP_NAME} web dashboard -> http://{args.host}:{args.port}  [source: {args.source}]")
     print("Press Ctrl+C to stop.")
     try:
         httpd.serve_forever()

@@ -27,24 +27,21 @@ per-zone status and sends override/ARM/DISARM commands back on the POST reply.
 ## 1. Before anything else — sanity check (2 min, no hardware)
 
 Prove the software works with the built-in simulator first. If this fails, fix
-it before touching hardware.
+it before touching hardware. **No code editing** — just pass `--source sim`:
 
 ```bash
 cd dashboard
-python server.py            # binds 127.0.0.1:8000
-```
-
-Temporarily use the simulator so you see data with no ESP32:
-in `dashboard/server.py`, in `make_source()`, make it:
-
-```python
-# return HttpIngestSource()   # ← the real ESP32 path (put this back in step 4)
-return SimulatedSource()      # ← fake data, no hardware
+python server.py --source sim        # fake data, no hardware, binds 127.0.0.1:8000
 ```
 
 Open <http://127.0.0.1:8000>. You should see live charts moving, status tiles,
 and an event log. Log in (below), hit **ARM/DISARM/Reset** — the banner and log
-react. **Once this works, put `make_source()` back to `HttpIngestSource()`.**
+react. That's the whole UI working. **Stop it with Ctrl+C**, then move to step 2
+(drop `--source sim` — the real ESP32 path is the default).
+
+> `--source` picks where data comes from: `http` (default, real ESP32 over
+> WiFi), `sim` (fake data), or `serial` (USB/Bluetooth Arduino). Nothing in the
+> code needs changing between them.
 
 **Demo login** (read-only monitoring needs no login; controls do):
 
@@ -125,8 +122,7 @@ Arduino IDE **or** Wokwi.
 
 ## 4. Bring it together (the actual end-to-end test)
 
-1. Server running from step 2 (`--host 0.0.0.0`, `make_source()` =
-   `HttpIngestSource()`).
+1. Server running from step 2 (`--host 0.0.0.0`, default `--source http`).
 2. Power the ESP32 and Pico on the same hotspot.
 3. Open `http://LAPTOP_IP:8000` on the laptop (and/or a phone).
 
@@ -191,7 +187,7 @@ Within ~2 s each node's zone tile should go live. Then walk the checklist.
 # run the dashboard (from repo root)
 cd dashboard && python server.py --host 0.0.0.0      # http://LAPTOP_IP:8000
 
-# no-hardware demo: set make_source() -> SimulatedSource() in server.py
+# no-hardware demo: add --source sim
 # find laptop IP (Windows):  ipconfig   (look for the hotspot adapter IPv4)
 ```
 
