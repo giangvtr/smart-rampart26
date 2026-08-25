@@ -1,0 +1,1040 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MuseumGuard</title>
+<style>
+  :root{
+    --bg:#0f1216; --panel:#171c22; --panel-2:#1e242c; --line:#2a323c;
+    --text:#e6edf3; --muted:#8b98a5;
+    --ok:#3fb950; --warn:#d29922; --alarm:#f85149; --stale:#a371f7; --disc:#6e7681;
+    --accent:#58a6ff;
+    --head-h:30px;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    margin:0; background:var(--bg); color:var(--text); overflow:hidden;
+    font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    display:flex; flex-direction:column;
+  }
+  button,select,input{font:inherit; color:inherit}
+  button{
+    background:var(--panel-2); border:1px solid var(--line); color:var(--text);
+    padding:6px 11px; border-radius:6px; cursor:pointer;
+  }
+  button:hover:not(:disabled){background:#28313b; border-color:#3d4854}
+  button:disabled{opacity:.4; cursor:not-allowed}
+  button.primary{background:var(--accent); border-color:var(--accent); color:#04121f; font-weight:600}
+  button.danger{background:#7d2620; border-color:#a13029; color:#ffdedb}
+  select,input{background:var(--panel-2); border:1px solid var(--line); padding:5px 8px; border-radius:6px}
+
+  /* ---------- header ---------- */
+  header{
+    display:flex; align-items:center; gap:10px; padding:7px 12px; flex:none;
+    background:var(--panel); border-bottom:1px solid var(--line); flex-wrap:wrap;
+  }
+  .brand{font-weight:700; letter-spacing:.3px; font-size:15px}
+  .brand span{color:var(--muted); font-weight:400; margin-left:8px; font-size:12px}
+  .spacer{flex:1}
+  .pill{
+    display:inline-flex; align-items:center; gap:7px; padding:4px 11px;
+    border-radius:999px; background:var(--panel-2); border:1px solid var(--line); font-size:12px;
+  }
+  .dot{width:8px; height:8px; border-radius:50%; background:var(--disc)}
+  .dot.on{background:var(--ok); box-shadow:0 0 8px var(--ok)}
+  .lgroup{display:flex; gap:4px; align-items:center}
+  .lgroup button{padding:4px 9px; font-size:12px}
+
+  /* ---------- alarm banner ---------- */
+  #banner{
+    padding:6px 16px; font-weight:700; text-align:center; letter-spacing:.4px; flex:none;
+    background:#12351b; color:#8ee79b; border-bottom:1px solid var(--line); font-size:13px;
+  }
+  #banner.alarm{background:var(--alarm); color:#fff; animation:flash 1s steps(1,end) infinite}
+  @keyframes flash{50%{background:#8c1d18}}
+
+  /* ---------- layout ---------- */
+  main{flex:1; display:flex; min-height:0; position:relative}
+  aside{
+    width:290px; flex:none; background:var(--panel); border-right:1px solid var(--line);
+    overflow-y:auto; padding:14px; transition:margin-left .18s ease;
+  }
+  body.side-collapsed aside{margin-left:-291px}
+  aside h3{
+    margin:18px 0 8px; font-size:11px; text-transform:uppercase; letter-spacing:.9px;
+    color:var(--muted); font-weight:600;
+  }
+  aside h3:first-child{margin-top:0}
+  #sideToggle{padding:4px 9px; font-size:13px; line-height:1.2; flex:none}
+
+  /* ---------- workspace ---------- */
+  #workspace{
+    flex:1; position:relative; overflow:hidden;
+    background:radial-gradient(circle at 1px 1px, #1b2129 1px, transparent 1.6px) 0 0/22px 22px, var(--bg);
+  }
+  #snapGhost{
+    position:absolute; display:none; z-index:9999; pointer-events:none;
+    background:rgba(88,166,255,.16); border:2px solid var(--accent); border-radius:8px;
+    box-shadow:inset 0 0 24px rgba(88,166,255,.25);
+    transition:left .09s ease, top .09s ease, width .09s ease, height .09s ease;
+  }
+
+  /* ---------- windows ---------- */
+  .win{
+    position:absolute; display:flex; flex-direction:column; min-width:200px; min-height:120px;
+    background:var(--panel); border:1px solid var(--line); border-top:3px solid var(--disc);
+    border-radius:8px; overflow:hidden; box-shadow:0 6px 22px #0007;
+    container-type:inline-size;          /* lets the title bar shed labels when narrow */
+  }
+  .win.focused{border-color:#3d4854; box-shadow:0 10px 34px #000a}
+  .win.dragging{opacity:.9; box-shadow:0 16px 44px #000c; transition:none}
+  .win.snapping{transition:left .12s ease, top .12s ease, width .12s ease, height .12s ease}
+  .win.hidden{display:none}
+
+  /* Title bar. The window buttons must survive every width, so everything else
+     is flex:none and the title is the only thing allowed to shrink/ellipsis. */
+  .win-head{
+    display:flex; align-items:center; gap:6px; padding:0 4px 0 10px; height:var(--head-h);
+    flex:none; background:var(--panel-2); border-bottom:1px solid var(--line);
+    cursor:grab; user-select:none; overflow:hidden;
+  }
+  .win-head:active{cursor:grabbing}
+  .win-head .title{
+    font-weight:600; font-size:12.5px; white-space:nowrap;
+    flex:1 1 auto; min-width:20px; overflow:hidden; text-overflow:ellipsis;
+  }
+  .win-head .reading{
+    font-weight:700; font-variant-numeric:tabular-nums; font-size:14px;
+    white-space:nowrap; flex:none;
+  }
+  .win-head select{font-size:11px; padding:2px 3px; cursor:pointer; flex:none}
+  .win-head .liveBtn{font-size:11px; padding:2px 6px; flex:none; white-space:nowrap}
+  .wbtns{display:flex; gap:1px; margin-left:2px; flex:none}
+  /* As a window narrows, shed the least useful bits in order: the "Live" wording,
+     then the zone prefix (it's already on the border colour, sidebar and taskbar),
+     then the button padding, and only at the very end the time-scale select. */
+  @container (max-width:500px){ .win-head .zn{display:none} }
+  @container (max-width:480px){ .win-head .liveBtn .lbl{display:none} }
+  /* .wbtns .wb beats the plain .wb rule below regardless of source order */
+  @container (max-width:380px){ .wbtns .wb{width:22px} .win-head{gap:5px; padding-left:8px} }
+  @container (max-width:380px){ .win-head select{display:none} }
+  .wb{
+    width:26px; height:22px; padding:0; display:grid; place-items:center; font-size:12px;
+    background:transparent; border:none; border-radius:4px; color:var(--muted); line-height:1;
+  }
+  .wb:hover:not(:disabled){background:#323c48; color:var(--text)}
+  .wb.cls:hover{background:#a13029; color:#fff}
+
+  .chart-wrap{position:relative; flex:1; min-height:0; overflow:hidden}
+  canvas{display:block; width:100%; height:100%; cursor:crosshair}
+  .tip{
+    position:absolute; pointer-events:none; background:#0b0e12ee; border:1px solid var(--line);
+    border-radius:5px; padding:4px 8px; font-size:11.5px; white-space:nowrap; display:none;
+    font-variant-numeric:tabular-nums; z-index:2;
+  }
+
+  /* resize handles -- kept inside the box: .win clips overflow for its rounded corners */
+  .rz{position:absolute; z-index:3}
+  .rz.n{top:0; left:12px; right:12px; height:5px; cursor:ns-resize}
+  .rz.s{bottom:0; left:12px; right:12px; height:5px; cursor:ns-resize}
+  .rz.w{left:0; top:12px; bottom:12px; width:5px; cursor:ew-resize}
+  .rz.e{right:0; top:12px; bottom:12px; width:5px; cursor:ew-resize}
+  .rz.nw{top:0; left:0; width:12px; height:12px; cursor:nwse-resize}
+  .rz.ne{top:0; right:0; width:12px; height:12px; cursor:nesw-resize}
+  .rz.sw{bottom:0; left:0; width:12px; height:12px; cursor:nesw-resize}
+  .rz.se{bottom:0; right:0; width:12px; height:12px; cursor:nwse-resize}
+  .win.focused .rz.se{
+    background:linear-gradient(135deg, transparent 55%, var(--line) 55%, var(--line) 70%,
+      transparent 70%, transparent 80%, var(--line) 80%);
+  }
+  .win.maxed .rz{display:none}
+
+  /* ---------- taskbar ---------- */
+  #taskbar{
+    flex:none; display:flex; align-items:center; gap:6px; padding:4px 10px; min-height:32px;
+    background:var(--panel); border-top:1px solid var(--line); overflow-x:auto;
+  }
+  #taskbar .tb-lbl{font-size:11px; color:var(--muted); text-transform:uppercase;
+    letter-spacing:.7px; margin-right:4px; flex:none}
+  .tb{
+    display:inline-flex; align-items:center; gap:7px; padding:3px 10px; font-size:12px;
+    border-radius:5px; white-space:nowrap; border:1px solid var(--line); background:var(--panel-2);
+  }
+  .tb .tdot{width:7px; height:7px; border-radius:50%; background:var(--disc); flex:none}
+  .tb.off{opacity:.45; font-style:italic}
+  .tb.active{border-color:var(--accent); box-shadow:inset 0 -2px 0 var(--accent)}
+
+  /* ---------- status tiles ---------- */
+  .tile{
+    display:flex; align-items:center; justify-content:space-between; gap:8px;
+    padding:7px 10px; border-radius:6px; background:var(--panel-2);
+    border-left:3px solid var(--disc); margin-bottom:6px;
+  }
+  .tile .nm{font-size:12px; color:var(--muted)}
+  .tile .vl{font-weight:700; font-variant-numeric:tabular-nums}
+
+  .tog{display:flex; align-items:center; gap:8px; padding:4px 0; font-size:13px; cursor:pointer}
+  .tog input{accent-color:var(--accent); cursor:pointer}
+
+  .row{display:flex; gap:8px; margin-bottom:8px}
+  .row button{flex:1}
+  #authState{font-size:12px; margin-bottom:10px; padding:7px 10px; border-radius:6px;
+    background:rgba(248,81,73,.12); color:#ffa198; border:1px solid rgba(248,81,73,.3)}
+  #authState.on{background:rgba(63,185,80,.12); color:#7ee787; border-color:rgba(63,185,80,.3)}
+
+  #log{
+    font:11.5px/1.6 ui-monospace,SFMono-Regular,Consolas,monospace; color:var(--muted);
+    background:var(--bg); border:1px solid var(--line); border-radius:6px;
+    padding:8px; height:170px; overflow-y:auto; white-space:pre-wrap; word-break:break-word;
+  }
+
+  /* ---------- modal ---------- */
+  #modal{
+    position:fixed; inset:0; background:#000a; display:none;
+    align-items:center; justify-content:center; z-index:10000;
+  }
+  #modal.show{display:flex}
+  .dlg{background:var(--panel); border:1px solid var(--line); border-radius:10px;
+    padding:20px; width:320px}
+  .dlg h2{margin:0 0 14px; font-size:16px}
+  .dlg label{display:block; font-size:12px; color:var(--muted); margin:10px 0 4px}
+  .dlg input{width:100%}
+  .err{color:#ffa198; font-size:12px; margin-top:10px; display:none}
+</style>
+</head>
+<body>
+
+<header>
+  <button id="sideToggle" title="Show / hide the sidebar">‹</button>
+  <div class="brand">🏛 MuseumGuard <span id="subtitle"></span></div>
+  <div class="lgroup">
+    <button id="resetLayout" title="Restore the default panel layout">Reset layout</button>
+  </div>
+  <div class="spacer"></div>
+  <div class="pill"><span class="dot" id="connDot"></span><span id="connText">connecting…</span></div>
+</header>
+
+<div id="banner">All clear</div>
+
+<main>
+  <aside>
+    <h3>Controls</h3>
+    <div id="authState">Not logged in — overrides locked</div>
+    <div class="row"><button id="loginBtn" class="primary">Log in…</button></div>
+    <div class="row">
+      <button class="ctl" data-zone="SYSTEM" data-sensor="ALL" data-action="ARM">ARM</button>
+      <button class="ctl danger" data-zone="SYSTEM" data-sensor="ALL" data-action="DISARM">DISARM</button>
+    </div>
+    <div id="resets"></div>
+
+    <h3>Status</h3>
+    <div id="tiles"></div>
+
+    <h3>Panels</h3>
+    <div id="toggles"></div>
+
+    <h3>Event log</h3>
+    <div id="log"></div>
+  </aside>
+
+  <div id="workspace"><div id="snapGhost"></div></div>
+</main>
+
+<div id="taskbar"><span class="tb-lbl">Panels</span></div>
+
+<div id="modal">
+  <form class="dlg" id="loginForm">
+    <h2>Agent login</h2>
+    <label for="u">Username</label><input id="u" value="guard" autocomplete="username">
+    <label for="p">Password</label><input id="p" type="password" autocomplete="current-password">
+    <div class="err" id="loginErr"></div>
+    <div class="row" style="margin-top:16px">
+      <button type="button" id="cancelBtn">Cancel</button>
+      <button type="submit" class="primary">Log in</button>
+    </div>
+  </form>
+</div>
+
+<script>
+"use strict";
+
+// ---------------------------------------------------------------------------
+// State
+// ---------------------------------------------------------------------------
+let BOOT = null, TOKEN = null, COLORS = {}, SCALES = [];
+const charts = new Map();   // key -> Chart
+const wins   = new Map();   // key -> Win
+let zTop = 10;
+
+const $ = s => document.querySelector(s);
+const fmtClock = ts => new Date(ts * 1000).toLocaleTimeString();
+const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+
+// ---------------------------------------------------------------------------
+// Canvas chart -- no library: zoom (wheel), pan (drag), live-follow, hover
+// ---------------------------------------------------------------------------
+class Chart {
+  constructor(canvas, tip, def) {
+    this.cv = canvas; this.tip = tip; this.def = def;
+    this.ctx = canvas.getContext("2d");
+    this.t = []; this.v = [];
+    this.windowSec = SCALES[BOOT.defaultScaleIndex][1] || 120;
+    this.live = true;
+    this.right = Date.now() / 1000;   // right edge of the view (epoch secs)
+    this.state = "DISCONNECTED";
+    this.hover = null;
+    this.dirty = true;
+
+    canvas.addEventListener("wheel", e => this.onWheel(e), {passive:false});
+    canvas.addEventListener("pointerdown", e => this.onDown(e));
+    canvas.addEventListener("pointermove", e => this.onMove(e));
+    canvas.addEventListener("pointerup",   e => this.onUp(e));
+    canvas.addEventListener("pointerleave", () => { this.hover=null; this.tip.style.display="none"; this.dirty=true; });
+    canvas.addEventListener("dblclick", () => this.goLive());
+  }
+
+  push(ts, val) {
+    this.t.push(ts); this.v.push(val);
+    if (this.t.length > 20000) { this.t.splice(0, 5000); this.v.splice(0, 5000); }
+    this.dirty = true;
+  }
+
+  goLive(){ this.live = true; this.dirty = true; }
+
+  // -- interaction --------------------------------------------------------
+  onWheel(e){
+    e.preventDefault();
+    const r = this.cv.getBoundingClientRect();
+    const frac = (e.offsetX - 48) / Math.max(1, r.width - 58); // cursor pos in plot
+    const anchor = this.right - (1 - clamp(frac, 0, 1)) * this.windowSec;
+    const factor = e.deltaY > 0 ? 1.25 : 0.8;
+    this.windowSec = clamp(this.windowSec * factor, 5, 24*3600);
+    if (!this.live) this.right = anchor + (this.right - anchor) * factor;
+    this.dirty = true;
+  }
+  onDown(e){ this.drag = {x:e.clientX, right:this.right}; this.cv.setPointerCapture(e.pointerId); }
+  onUp(e){ this.drag = null; try{ this.cv.releasePointerCapture(e.pointerId);}catch(_){} }
+  onMove(e){
+    const r = this.cv.getBoundingClientRect();
+    if (this.drag){
+      const perPx = this.windowSec / Math.max(1, r.width - 58);
+      this.live = false;
+      this.right = this.drag.right - (e.clientX - this.drag.x) * perPx;
+      this.dirty = true;
+    }
+    this.hover = {x:e.clientX - r.left, y:e.clientY - r.top};
+    this.dirty = true;
+  }
+
+  // -- drawing ------------------------------------------------------------
+  draw(){
+    const dpr = window.devicePixelRatio || 1;
+    const w = this.cv.clientWidth, h = this.cv.clientHeight;
+    if (!w || !h) return;
+    if (this.cv.width !== Math.round(w*dpr) || this.cv.height !== Math.round(h*dpr)){
+      this.cv.width = Math.round(w*dpr); this.cv.height = Math.round(h*dpr);
+    }
+    const c = this.ctx;
+    c.setTransform(dpr,0,0,dpr,0,0);
+    c.clearRect(0,0,w,h);
+
+    const L=48, R=10, T=10, B=20;
+    const pw = w-L-R, ph = h-T-B;
+    if (pw<=0||ph<=0) return;
+
+    if (this.live) this.right = Date.now()/1000;
+    const t1 = this.right, t0 = t1 - this.windowSec;
+    const d = this.def;
+    const yMin = d.vmin, yMax = d.vmax;
+    const X = t => L + (t - t0) / (t1 - t0) * pw;
+    const Y = v => T + (1 - (v - yMin)/(yMax - yMin)) * ph;
+
+    // threshold bands
+    const band = (lo,hi,col) => {
+      const y1 = Y(Math.min(hi ?? yMax, yMax)), y2 = Y(Math.max(lo ?? yMin, yMin));
+      c.fillStyle = col; c.fillRect(L, y1, pw, Math.max(0, y2-y1));
+    };
+    if (d.alarm){
+      if (d.alarm[0]!=null) band(yMin, d.alarm[0], "rgba(248,81,73,.13)");
+      if (d.alarm[1]!=null) band(d.alarm[1], yMax, "rgba(248,81,73,.13)");
+    }
+    if (d.warn){
+      if (d.warn[0]!=null) band(d.alarm?.[0] ?? yMin, d.warn[0], "rgba(210,153,34,.13)");
+      if (d.warn[1]!=null) band(d.warn[1], d.alarm?.[1] ?? yMax, "rgba(210,153,34,.13)");
+    }
+
+    // grid + axes -- thin out the ticks on small windows
+    const ySteps = ph < 130 ? 2 : 4;
+    const xSteps = pw < 330 ? 2 : 4;
+    c.strokeStyle="#2a323c"; c.fillStyle="#8b98a5"; c.lineWidth=1;
+    c.font="10px ui-monospace,Consolas,monospace"; c.textBaseline="middle";
+    for (let i=0;i<=ySteps;i++){
+      const val = yMin + (yMax-yMin)*i/ySteps, y = Math.round(Y(val))+.5;
+      c.beginPath(); c.moveTo(L,y); c.lineTo(L+pw,y); c.stroke();
+      c.textAlign="right"; c.fillText(val.toFixed(val>=100?0:1), L-6, y);
+    }
+    c.textAlign="center"; c.textBaseline="top";
+    for (let i=0;i<=xSteps;i++){
+      const t = t0 + (t1-t0)*i/xSteps, x = Math.round(X(t))+.5;
+      c.strokeStyle="#222932";
+      c.beginPath(); c.moveTo(x,T); c.lineTo(x,T+ph); c.stroke();
+      c.fillText(fmtClock(t), clamp(x, 26, w-26), T+ph+5);
+    }
+
+    // series (clip to plot area, only draw visible slice)
+    c.save(); c.beginPath(); c.rect(L,T,pw,ph); c.clip();
+    let i0 = this.lowerBound(t0) - 1; if (i0 < 0) i0 = 0;
+    const col = COLORS[this.state] || "#8b98a5";
+    c.strokeStyle = col; c.lineWidth = 1.8; c.lineJoin="round";
+    c.beginPath();
+    let started=false, firstX=0, lastX=0;
+    for (let i=i0;i<this.t.length;i++){
+      const x = X(this.t[i]), y = Y(this.v[i]);
+      if (!started){ c.moveTo(x,y); started=true; firstX=x; } else c.lineTo(x,y);
+      lastX = x;
+      if (this.t[i] > t1) break;
+    }
+    c.stroke();
+    // soft fill under the line (close the polygon on the points actually drawn)
+    if (started){
+      c.lineTo(lastX, T+ph); c.lineTo(firstX, T+ph); c.closePath();
+      c.fillStyle = col + "18"; c.fill();
+    }
+    c.restore();
+
+    // hover crosshair + tooltip
+    if (this.hover && this.hover.x>L && this.hover.x<L+pw && this.t.length){
+      const ht = t0 + (this.hover.x - L)/pw * (t1-t0);
+      const idx = clamp(this.lowerBound(ht), 0, this.t.length-1);
+      const hx = X(this.t[idx]), hy = Y(this.v[idx]);
+      if (hx>=L && hx<=L+pw){
+        c.strokeStyle="#8b98a5"; c.setLineDash([3,3]);
+        c.beginPath(); c.moveTo(hx,T); c.lineTo(hx,T+ph); c.stroke(); c.setLineDash([]);
+        c.fillStyle=col; c.beginPath(); c.arc(hx,hy,3.5,0,7); c.fill();
+        this.tip.style.display="block";
+        this.tip.textContent = `${this.v[idx]} ${d.unit} · ${fmtClock(this.t[idx])}`;
+        this.tip.style.left = Math.min(w-this.tip.offsetWidth-6, hx+10) + "px";
+        this.tip.style.top  = Math.max(2, hy-30) + "px";
+      }
+    } else this.tip.style.display="none";
+
+    // "PAUSED" marker when scrolled off live
+    if (!this.live){
+      c.fillStyle="#d29922"; c.textAlign="right"; c.textBaseline="top";
+      c.font="10px sans-serif"; c.fillText("⏸ PAUSED", L+pw-2, T+2);
+    }
+    this.dirty = false;
+  }
+
+  lowerBound(target){                       // first index with t >= target
+    let lo=0, hi=this.t.length;
+    while(lo<hi){ const m=(lo+hi)>>1; if(this.t[m]<target) lo=m+1; else hi=m; }
+    return lo;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Window manager -- floating panels with Windows-style edge snapping
+// ---------------------------------------------------------------------------
+const wsRect = () => $("#workspace").getBoundingClientRect();
+const GAP = 8, MIN_W = 200, MIN_H = 120;
+const EDGE = 30;             // px from a workspace border that arms a snap
+const LS_KEY = "museumguard.layout.v1";
+let layoutCustomised = false;
+
+class Win {
+  constructor(el, key, taskBtn){
+    this.el = el; this.key = key; this.tb = taskBtn;
+    this.minimised = false; this.maxed = false; this.closed = false;
+    this.restore = null;               // rect to return to after maximise
+    this.z = ++zTop;
+    el.style.zIndex = this.z;
+
+    const head = el.querySelector(".win-head");
+    head.addEventListener("pointerdown", e => this.startDrag(e));
+    head.addEventListener("dblclick", e => {
+      if (e.target.closest("button,select")) return;
+      this.toggleMax();
+    });
+    el.addEventListener("pointerdown", () => this.focus(), true);
+    el.querySelectorAll(".rz").forEach(h =>
+      h.addEventListener("pointerdown", e => this.startResize(e, h.dataset.dir)));
+
+    el.querySelector(".wb.min").addEventListener("click", () => this.minimise());
+    el.querySelector(".wb.max").addEventListener("click", () => this.toggleMax());
+    el.querySelector(".wb.cls").addEventListener("click", () => this.close());
+    taskBtn.addEventListener("click", () => this.taskClick());
+  }
+
+  // -- geometry -----------------------------------------------------------
+  rect(){
+    const s = this.el.style;
+    return {x:parseFloat(s.left)||0, y:parseFloat(s.top)||0,
+            w:parseFloat(s.width)||MIN_W, h:parseFloat(s.height)||MIN_H};
+  }
+  setRect(r, animate){
+    const el = this.el;
+    if (animate){ el.classList.add("snapping"); setTimeout(() => el.classList.remove("snapping"), 180); }
+    el.style.left = Math.round(r.x)+"px";
+    el.style.top = Math.round(r.y)+"px";
+    el.style.width = Math.round(Math.max(MIN_W, r.w))+"px";
+    el.style.height = Math.round(Math.max(MIN_H, r.h))+"px";
+    markDirty(this.key);
+  }
+  setMaxed(on){
+    this.maxed = on;
+    this.el.classList.toggle("maxed", on);
+    this.el.querySelector(".wb.max").textContent = on ? "❐" : "▢";
+  }
+  focus(){
+    if (this.z !== zTop){
+      this.z = ++zTop; this.el.style.zIndex = this.z;
+    }
+    for (const w of wins.values()){
+      w.el.classList.toggle("focused", w === this);
+      w.tb.classList.toggle("active", w === this && !w.minimised && !w.closed);
+    }
+    saveLayout();
+  }
+
+  // -- title-bar buttons --------------------------------------------------
+  minimise(){
+    if (this.minimised) return;
+    this.minimised = true; this.el.classList.add("hidden");
+    this.tb.classList.add("off"); this.tb.classList.remove("active");
+    saveLayout();
+  }
+  reopen(){
+    this.minimised = false; this.closed = false;
+    this.el.classList.remove("hidden"); this.tb.classList.remove("off");
+    syncToggle(this.key, true);
+    this.focus(); markDirty(this.key); saveLayout();
+  }
+  toggleMax(){
+    if (this.maxed){
+      this.setMaxed(false);
+      if (this.restore) this.setRect(this.restore, true);
+    } else {
+      this.restore = this.rect();
+      this.setMaxed(true);
+      const r = wsRect();
+      this.setRect({x:GAP, y:GAP, w:r.width-2*GAP, h:r.height-2*GAP}, true);
+    }
+    layoutCustomised = true; saveLayout();
+  }
+  close(){
+    this.closed = true; this.el.classList.add("hidden");
+    this.tb.classList.add("off"); this.tb.classList.remove("active");
+    syncToggle(this.key, false); saveLayout();
+  }
+  taskClick(){
+    if (this.closed || this.minimised) this.reopen();
+    else if (this.z === zTop) this.minimise();
+    else this.focus();
+  }
+
+  // -- dragging (move + edge snap) ----------------------------------------
+  startDrag(e){
+    if (e.button !== 0 || e.target.closest("button,select,input")) return;
+    this.focus();
+    if (this.maxed){                   // dragging a maximised window restores it under the cursor
+      const r = this.restore || {w:460, h:300};
+      const w0 = wsRect();
+      this.setMaxed(false);
+      this.setRect({x: clamp(e.clientX - w0.left - r.w/2, 0, Math.max(0, w0.width - r.w)),
+                    y: 0, w:r.w, h:r.h});
+    }
+    const st = this.rect();
+    const w0 = wsRect();
+    const off = {x: e.clientX - w0.left - st.x, y: e.clientY - w0.top - st.y};
+    const from = {x: e.clientX, y: e.clientY};
+    let zone = null, moved = false;
+
+    const move = ev => {
+      // ignore the jitter of a plain click: without this a click on a top-row
+      // title bar counts as a drag into the top edge and snaps to maximised
+      if (!moved && Math.abs(ev.clientX-from.x) < 4 && Math.abs(ev.clientY-from.y) < 4) return;
+      if (!moved){ moved = true; this.el.classList.add("dragging"); }
+      const w = wsRect();
+      const px = ev.clientX - w.left, py = ev.clientY - w.top;
+      this.el.style.left = Math.round(clamp(px - off.x, -st.w + 60, w.width - 60)) + "px";
+      this.el.style.top  = Math.round(clamp(py - off.y, 0, w.height - 24)) + "px";
+      zone = snapZone(px, py, w);
+      showGhost(zone, w);
+    };
+    const up = () => {
+      this.el.classList.remove("dragging");
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      hideGhost();
+      if (!moved) return;                       // a click, not a drag -- change nothing
+      if (zone){
+        this.restore = st;
+        this.setRect(snapRect(zone, wsRect()), true);
+        this.setMaxed(zone === "max");
+      }
+      layoutCustomised = true; markDirty(this.key); saveLayout();
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    e.preventDefault();
+  }
+
+  // -- resizing from any edge / corner -------------------------------------
+  startResize(e, dir){
+    if (e.button !== 0) return;
+    e.stopPropagation(); e.preventDefault();
+    this.focus(); this.setMaxed(false);
+    const st = this.rect(), ws = wsRect();
+    const sx = e.clientX, sy = e.clientY;
+
+    const move = ev => {
+      const dx = ev.clientX - sx, dy = ev.clientY - sy;
+      let {x, y, w, h} = st;
+      if (dir.includes("e")) w = st.w + dx;
+      if (dir.includes("s")) h = st.h + dy;
+      if (dir.includes("w")){ w = st.w - dx; x = st.x + dx; }
+      if (dir.includes("n")){ h = st.h - dy; y = st.y + dy; }
+      if (w < MIN_W){ if (dir.includes("w")) x = st.x + st.w - MIN_W; w = MIN_W; }
+      if (h < MIN_H){ if (dir.includes("n")) y = st.y + st.h - MIN_H; h = MIN_H; }
+      x = clamp(x, 0, ws.width - MIN_W); y = clamp(y, 0, ws.height - MIN_H);
+      this.setRect({x, y, w: Math.min(w, ws.width - x), h: Math.min(h, ws.height - y)});
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      layoutCustomised = true; saveLayout();
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  }
+}
+
+// -- snap helpers ---------------------------------------------------------
+function snapZone(px, py, w){
+  const l = px < EDGE, r = px > w.width - EDGE;
+  const t = py < EDGE, b = py > w.height - EDGE;
+  if (t && l) return "tl";
+  if (t && r) return "tr";
+  if (b && l) return "bl";
+  if (b && r) return "br";
+  if (t) return "max";
+  if (l) return "left";
+  if (r) return "right";
+  if (b) return "bottom";
+  return null;
+}
+function snapRect(zone, w){
+  const W = w.width - 2*GAP, H = w.height - 2*GAP;
+  const hw = (W - GAP)/2, hh = (H - GAP)/2;
+  const x2 = GAP + hw + GAP, y2 = GAP + hh + GAP;
+  return {
+    max:   {x:GAP, y:GAP, w:W,  h:H},
+    left:  {x:GAP, y:GAP, w:hw, h:H},
+    right: {x:x2,  y:GAP, w:hw, h:H},
+    bottom:{x:GAP, y:y2,  w:W,  h:hh},
+    tl:    {x:GAP, y:GAP, w:hw, h:hh},
+    tr:    {x:x2,  y:GAP, w:hw, h:hh},
+    bl:    {x:GAP, y:y2,  w:hw, h:hh},
+    br:    {x:x2,  y:y2,  w:hw, h:hh}
+  }[zone];
+}
+function showGhost(zone, w){
+  const g = $("#snapGhost");
+  if (!zone){ g.style.display = "none"; return; }
+  const r = snapRect(zone, w);
+  g.style.display = "block";
+  g.style.left = r.x+"px"; g.style.top = r.y+"px";
+  g.style.width = r.w+"px"; g.style.height = r.h+"px";
+}
+function hideGhost(){ $("#snapGhost").style.display = "none"; }
+
+// -- layout presets -------------------------------------------------------
+const openWins = () => [...wins.values()].filter(w => !w.closed && !w.minimised);
+
+function tile(cols){
+  const list = openWins(); if (!list.length) return;
+  const w = wsRect();
+  // never ask for more columns than fit at MIN_W -- otherwise setRect clamps the
+  // width up while the x positions still assume the narrower cell, and the last
+  // column spills past the right edge
+  const fits = Math.max(1, Math.floor((w.width - GAP) / (MIN_W + GAP)));
+  cols = Math.max(1, Math.min(cols, fits));
+  const n = list.length, rows = Math.ceil(n / cols);
+  const cw = (w.width  - GAP*(cols+1)) / cols;
+  const ch = (w.height - GAP*(rows+1)) / rows;
+  list.forEach((win, i) => {
+    const row = Math.floor(i/cols), col = i % cols;
+    const inRow = Math.min(cols, n - row*cols);                       // last row may be short
+    const span  = (col === inRow-1) ? cols - col : 1;                 // stretch the last tile
+    const x = GAP + col*(cw+GAP);
+    win.setMaxed(false);
+    win.setRect({x, y: GAP + row*(ch+GAP),
+                 w: Math.min(cw*span + GAP*(span-1), w.width - GAP - x), h: ch}, true);
+  });
+  saveLayout();
+}
+
+function defaultLayout(){
+  for (const w of wins.values()){
+    w.closed = false; w.minimised = false;
+    w.el.classList.remove("hidden"); w.tb.classList.remove("off");
+    syncToggle(w.key, true);
+  }
+  layoutCustomised = false;
+  tile(2);
+}
+
+// -- persistence ----------------------------------------------------------
+let saveTimer = null;
+function saveLayout(){
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    const data = {custom: layoutCustomised,
+                  side: document.body.classList.contains("side-collapsed"), w:{}};
+    for (const [k, win] of wins){
+      data.w[k] = {...win.rect(), z:win.z, min:win.minimised, closed:win.closed,
+                   maxed:win.maxed, restore:win.restore};
+    }
+    try{ localStorage.setItem(LS_KEY, JSON.stringify(data)); }catch(_){}
+  }, 250);
+}
+function loadLayout(){
+  let data = null;
+  try{ data = JSON.parse(localStorage.getItem(LS_KEY) || "null"); }catch(_){}
+  if (!data || !data.w) return false;
+  if (data.side){
+    // collapse without the slide animation, so wsRect() below measures the final width
+    const aside = document.querySelector("aside");
+    aside.style.transition = "none";
+    document.body.classList.add("side-collapsed");
+    $("#sideToggle").textContent = "›";
+    void aside.offsetWidth;                       // force the reflow
+    requestAnimationFrame(() => { aside.style.transition = ""; });
+  }
+  const ws = wsRect();
+  let any = false;
+  for (const [k, win] of wins){
+    const s = data.w[k]; if (!s) continue;
+    any = true;
+    win.setRect({x: clamp(s.x, 0, Math.max(0, ws.width-60)),
+                 y: clamp(s.y, 0, Math.max(0, ws.height-24)),
+                 w: Math.min(s.w, ws.width), h: Math.min(s.h, ws.height)});
+    win.restore = s.restore || null;
+    win.z = s.z || ++zTop; zTop = Math.max(zTop, win.z);
+    win.el.style.zIndex = win.z;
+    if (s.maxed) win.setMaxed(true);
+    if (s.min) win.minimise();
+    if (s.closed) win.close();
+  }
+  layoutCustomised = !!data.custom;
+  return any;
+}
+
+function syncToggle(key, on){
+  const cb = document.querySelector(`.tog input[data-key="${key}"]`);
+  if (cb) cb.checked = on;
+}
+function markDirty(key){ const c = charts.get(key); if (c) c.dirty = true; }
+
+// ---------------------------------------------------------------------------
+// Build the UI from the bootstrap payload
+// ---------------------------------------------------------------------------
+function build(){
+  $("#subtitle").textContent = "Environmental & Security Monitoring";
+  COLORS = BOOT.colors; SCALES = BOOT.timeScales;
+
+  const ws = $("#workspace"), tiles = $("#tiles"), toggles = $("#toggles"),
+        resets = $("#resets"), taskbar = $("#taskbar");
+
+  for (const d of BOOT.sensors){
+    // ---- status tile ----
+    const tile = document.createElement("div");
+    tile.className = "tile"; tile.id = "tile-" + d.key;
+    tile.innerHTML = `<span class="nm">${d.zone} · ${d.label}</span><span class="vl">--</span>`;
+    tiles.appendChild(tile);
+
+    // ---- show/hide toggle ----
+    const lab = document.createElement("label");
+    lab.className = "tog";
+    lab.innerHTML = `<input type="checkbox" data-key="${d.key}" checked><span>${d.zone} · ${d.label}</span>`;
+    lab.querySelector("input").addEventListener("change", e => {
+      const w = wins.get(d.key);
+      if (e.target.checked) w.reopen(); else w.close();
+    });
+    toggles.appendChild(lab);
+
+    // ---- reset button for latching sensors ----
+    if (d.latched){
+      const b = document.createElement("button");
+      b.className = "ctl"; b.textContent = `Reset ${d.zone} · ${d.label}`;
+      b.dataset.zone=d.zone; b.dataset.sensor=d.sensor; b.dataset.action="RESET";
+      b.style.width="100%"; b.style.marginBottom="6px";
+      resets.appendChild(b);
+    }
+
+    // ---- taskbar button ----
+    const tb = document.createElement("button");
+    tb.className = "tb"; tb.dataset.key = d.key;
+    tb.innerHTML = `<span class="tdot"></span><span>${d.zone} · ${d.label}</span>`;
+    taskbar.appendChild(tb);
+
+    // ---- window ----
+    const el = document.createElement("div");
+    el.className = "win"; el.id = "win-" + d.key;
+    el.innerHTML = `
+      <div class="win-head">
+        <span class="title" title="${d.zone} · ${d.label}"><span class="zn">${d.zone} · </span>${d.label}</span>
+        <span class="reading">--</span>
+        <select class="scale" title="Time window">${SCALES.map((s,i)=>
+          `<option value="${i}"${i===BOOT.defaultScaleIndex?" selected":""}>${s[0]}</option>`).join("")}</select>
+        <button class="liveBtn" title="Jump back to live">●<span class="lbl"> Live</span></button>
+        <div class="wbtns">
+          <button class="wb min" title="Minimise">─</button>
+          <button class="wb max" title="Maximise">▢</button>
+          <button class="wb cls" title="Close">✕</button>
+        </div>
+      </div>
+      <div class="chart-wrap">
+        <canvas title="scroll = zoom · drag = pan · double-click = back to live"></canvas>
+        <div class="tip"></div>
+      </div>
+      <div class="rz n"  data-dir="n"></div><div class="rz s"  data-dir="s"></div>
+      <div class="rz w"  data-dir="w"></div><div class="rz e"  data-dir="e"></div>
+      <div class="rz nw" data-dir="nw"></div><div class="rz ne" data-dir="ne"></div>
+      <div class="rz sw" data-dir="sw"></div><div class="rz se" data-dir="se"></div>`;
+    ws.appendChild(el);
+    wins.set(d.key, new Win(el, d.key, tb));
+
+    const ch = new Chart(el.querySelector("canvas"), el.querySelector(".tip"), d);
+    charts.set(d.key, ch);
+    new ResizeObserver(() => { ch.dirty = true; }).observe(el.querySelector(".chart-wrap"));
+
+    // seed history
+    const H = d.history;
+    for (let i=0;i<H.t.length;i++) ch.push(H.t[i], H.v[i]);
+    if (d.value != null) setSensor(d.key, d.value, d.state);
+
+    el.querySelector(".scale").addEventListener("change", e => {
+      const s = SCALES[+e.target.value][1];
+      if (s == null){                       // "All" -> span the whole history
+        const now = Date.now()/1000;
+        const first = ch.t.length ? ch.t[0] : now - 300;
+        ch.windowSec = Math.max(60, now - first);
+      } else ch.windowSec = s;
+      ch.goLive();
+    });
+    el.querySelector(".liveBtn").addEventListener("click", () => ch.goLive());
+  }
+
+  document.querySelectorAll(".ctl").forEach(b =>
+    b.addEventListener("click", () => sendCommand(b.dataset.zone, b.dataset.sensor, b.dataset.action)));
+
+  // restore the user's last arrangement, else the default 2-column tiling
+  if (!loadLayout()) defaultLayout();
+
+  (BOOT.events||[]).forEach(e => addLog(e.msg, e.ts));
+  setConnected(BOOT.connected);
+  setAuth(false);
+}
+
+// ---------------------------------------------------------------------------
+// Live updates
+// ---------------------------------------------------------------------------
+function setSensor(key, value, state){
+  const ch = charts.get(key); if (!ch) return;
+  ch.state = state;
+  const col = COLORS[state] || "#6e7681";
+  const el = document.getElementById("win-"+key);
+  el.style.borderTopColor = col;
+  const rd = el.querySelector(".reading");
+  rd.textContent = `${value} ${ch.def.unit}`; rd.style.color = col;
+  const tile = document.getElementById("tile-"+key);
+  tile.style.borderLeftColor = col;
+  const vl = tile.querySelector(".vl");
+  vl.textContent = `${value} · ${state}`; vl.style.color = col;
+  const dot = document.querySelector(`.tb[data-key="${key}"] .tdot`);
+  if (dot) dot.style.background = col;
+}
+
+let _bannerKey = null;
+function refreshBanner(){
+  const alarming = [...charts.entries()].filter(([,c]) => c.state === "ALARM")
+                     .map(([k]) => k.split(".")[0]);
+  const key = [...new Set(alarming)].sort().join(",");
+  if (key === _bannerKey) return;      // only touch the DOM when it changes
+  _bannerKey = key;
+  const b = $("#banner");
+  if (key){ b.className = "alarm"; b.textContent = "⚠  ACTIVE ALARM: " + key; }
+  else { b.className=""; b.textContent = "All clear"; }
+}
+
+function setConnected(on){
+  $("#connDot").className = "dot" + (on ? " on" : "");
+  $("#connText").textContent = on ? "CONNECTED" : "DISCONNECTED";
+  if (!on) for (const [key, ch] of charts){
+    ch.state = "DISCONNECTED"; ch.dirty = true;
+    const el = document.getElementById("win-"+key);
+    if (el) el.style.borderTopColor = COLORS.DISCONNECTED;
+    const dot = document.querySelector(`.tb[data-key="${key}"] .tdot`);
+    if (dot) dot.style.background = COLORS.DISCONNECTED;
+  }
+}
+
+// Pull authoritative state back from the server after a dropped stream.
+// EventSource reconnects on its own, but it only ever carries *new* readings --
+// so without this the page keeps whatever it had before the drop (a stale
+// ALARM, a gap in the trace) even though the server has moved on or restarted.
+async function resync(){
+  let boot;
+  try { boot = await (await fetch("/api/bootstrap", {cache:"no-store"})).json(); }
+  catch(_){ return; }                    // still down -- onopen fires again later
+
+  const restarted = boot.bootId !== BOOT.bootId;
+  BOOT = boot; COLORS = boot.colors; SCALES = boot.timeScales;
+
+  for (const d of boot.sensors){
+    const ch = charts.get(d.key);
+    if (!ch) continue;
+    // the server's ring buffer is the truth; replacing (not appending) also
+    // fills in whatever arrived while the stream was down
+    ch.t.length = 0; ch.v.length = 0;
+    const H = d.history;
+    for (let i=0;i<H.t.length;i++) ch.push(H.t[i], H.v[i]);
+    ch.state = d.state; ch.dirty = true;
+    if (d.value != null) setSensor(d.key, d.value, d.state);
+  }
+  _bannerKey = null;                     // state changed underneath it
+  refreshBanner();
+
+  if (restarted){
+    $("#log").textContent = "";          // the old process's log is history now
+    (boot.events||[]).forEach(e => addLog(e.msg, e.ts));
+    if (TOKEN) setAuth(false);           // tokens die with the process
+    addLog("Server restarted — dashboard resynced.");
+  } else {
+    addLog("Reconnected — dashboard resynced.");
+  }
+  setConnected(boot.connected);
+}
+
+function addLog(msg, ts){
+  const el = $("#log");
+  const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 30;
+  el.textContent += `[${new Date((ts||Date.now()/1000)*1000).toLocaleTimeString()}] ${msg}\n`;
+  if (atBottom) el.scrollTop = el.scrollHeight;
+}
+
+// ---------------------------------------------------------------------------
+// Auth + commands
+// ---------------------------------------------------------------------------
+function setAuth(on, user){
+  TOKEN = on ? TOKEN : null;
+  const s = $("#authState");
+  s.className = on ? "on" : "";
+  s.textContent = on ? `Logged in as ${user} — overrides enabled`
+                     : "Not logged in — overrides locked";
+  document.querySelectorAll(".ctl").forEach(b => b.disabled = !on);
+  $("#loginBtn").textContent = on ? "Log out" : "Log in…";
+}
+
+async function sendCommand(zone, sensor, action){
+  const r = await fetch("/api/command", {
+    method:"POST", headers:{"Content-Type":"application/json","X-Auth-Token":TOKEN||""},
+    body: JSON.stringify({zone, sensor, action})
+  });
+  if (!r.ok) addLog("Command rejected — login required.");
+}
+
+$("#loginBtn").addEventListener("click", async () => {
+  if (TOKEN){
+    await fetch("/api/logout", {method:"POST", headers:{"X-Auth-Token":TOKEN}});
+    setAuth(false);
+  } else { $("#modal").classList.add("show"); $("#p").focus(); }
+});
+$("#cancelBtn").addEventListener("click", () => {
+  $("#modal").classList.remove("show"); $("#loginErr").style.display="none";
+});
+$("#loginForm").addEventListener("submit", async e => {
+  e.preventDefault();
+  const r = await fetch("/api/login", {
+    method:"POST", headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({username:$("#u").value, password:$("#p").value})
+  });
+  const d = await r.json();
+  if (d.ok){
+    TOKEN = d.token; setAuth(true, d.user);
+    $("#modal").classList.remove("show"); $("#p").value=""; $("#loginErr").style.display="none";
+  } else {
+    $("#loginErr").textContent = d.error || "Login failed"; $("#loginErr").style.display="block";
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Layout buttons, sidebar, viewport resize
+// ---------------------------------------------------------------------------
+$("#resetLayout").addEventListener("click", () => defaultLayout());
+
+$("#sideToggle").addEventListener("click", () => {
+  const c = document.body.classList.toggle("side-collapsed");
+  $("#sideToggle").textContent = c ? "›" : "‹";
+  setTimeout(() => { layoutCustomised ? clampAll() : tile(2); saveLayout(); }, 200);
+});
+
+function clampAll(){
+  const w = wsRect();
+  for (const win of wins.values()){
+    if (win.maxed){ win.setRect({x:GAP, y:GAP, w:w.width-2*GAP, h:w.height-2*GAP}); continue; }
+    const r = win.rect();
+    const nw = Math.min(r.w, w.width  - 2*GAP);
+    const nh = Math.min(r.h, w.height - 2*GAP);
+    win.setRect({x: clamp(r.x, 0, Math.max(0, w.width - 60)),
+                 y: clamp(r.y, 0, Math.max(0, w.height - 24)), w:nw, h:nh});
+  }
+}
+let rzTimer = null;
+window.addEventListener("resize", () => {
+  clearTimeout(rzTimer);
+  rzTimer = setTimeout(() => { layoutCustomised ? clampAll() : tile(2); }, 120);
+});
+
+// ---------------------------------------------------------------------------
+// Boot: load state, then stream
+// ---------------------------------------------------------------------------
+(async function(){
+  BOOT = await (await fetch("/api/bootstrap")).json();
+  document.title = "MuseumGuard";
+  build();
+
+  const es = new EventSource("/api/stream");
+  es.onmessage = ev => {
+    const m = JSON.parse(ev.data);
+    if (m.type === "reading"){
+      const ch = charts.get(m.key);
+      if (ch){ ch.push(m.ts, m.value); setSensor(m.key, m.value, m.state); }
+    } else if (m.type === "connection"){ setConnected(m.connected); }
+    else if (m.type === "log"){ addLog(m.msg, m.ts); }
+  };
+  // `open` fires on every (re)connection, including the first -- skip that one,
+  // since the bootstrap above already seeded the page.
+  let everOpen = false;
+  es.onopen = () => { if (everOpen) resync(); else everOpen = true; };
+  es.onerror = () => setConnected(false);
+
+  // single render loop for every chart (cheap: only redraws what changed)
+  function frame(){
+    for (const [key, ch] of charts){
+      const win = wins.get(key);
+      if (win && (win.minimised || win.closed)) continue;   // never paint hidden windows
+      if (ch.live || ch.dirty) ch.draw();
+    }
+    refreshBanner();
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
