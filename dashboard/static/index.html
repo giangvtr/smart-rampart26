@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>MuseumGuard</title>
 <style>
   :root{
@@ -15,8 +15,12 @@
   }
   *{box-sizing:border-box}
   html,body{height:100%}
+  /* On a phone, 100% is the tallest the viewport ever gets, so the bottom of
+     the page hides under the browser's own chrome. dvh is the visible height. */
+  @supports (height:100dvh){ html,body{height:100dvh} }
   body{
     margin:0; background:var(--bg); color:var(--text); overflow:hidden;
+    overscroll-behavior:none;      /* no pull-to-refresh mid-orbit */
     font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
     display:flex; flex-direction:column;
   }
@@ -56,6 +60,59 @@
   #banner.alarm{background:var(--alarm); color:#fff; animation:flash 1s steps(1,end) infinite}
   #banner.disarmed{background:var(--warn); color:#1a1300}
   @keyframes flash{50%{background:#8c1d18}}
+
+  /* ---------- building view chrome ----------
+     The two renderers own everything inside #bStage; this is just the frame. */
+  #building{flex:1; display:none; flex-direction:column; min-height:0; position:relative}
+  body.view-building #building{display:flex}
+  body.view-building main,
+  body.view-building #taskbar{display:none}
+  body.view-building #resetLayout{display:none}
+
+  #bBar{
+    display:flex; align-items:center; gap:10px; padding:6px 12px; flex:none;
+    background:var(--panel); border-bottom:1px solid var(--line); font-size:12px;
+    flex-wrap:wrap;
+  }
+  .bgrp{display:inline-flex; align-items:center; gap:5px; color:var(--muted)}
+  .bgrp button{padding:4px 10px; font-size:12px}
+  .bgrp button.on{background:var(--accent); border-color:var(--accent); color:#04121f; font-weight:600}
+  .bsep{width:1px; height:18px; background:var(--line)}
+
+  /* the stage is the 3D viewport: a perspective root for the CSS 3D scene */
+  #bStage{
+    flex:1; min-height:0; position:relative; overflow:hidden; cursor:grab;
+    /* the renderer handles every gesture itself -- without this the browser
+       claims one-finger drags for scrolling and two for its own page zoom,
+       and the camera never sees them */
+    touch-action:none; user-select:none; -webkit-user-select:none;
+    -webkit-tap-highlight-color:transparent;
+    background:
+      radial-gradient(ellipse 70% 55% at 50% 42%, #1b2532 0%, transparent 70%),
+      linear-gradient(#0c0f13, #05070a);
+  }
+  #bStage.dragging{cursor:grabbing}
+
+  #bTip{
+    position:absolute; z-index:50; pointer-events:none; display:none;
+    background:rgba(12,16,21,.96); border:1px solid var(--line); border-radius:8px;
+    padding:8px 10px; font-size:12px; min-width:150px; max-width:230px;
+    box-shadow:0 10px 30px rgba(0,0,0,.6);
+  }
+  #bTip .t{font-weight:700; margin-bottom:5px}
+  #bTip .r{display:flex; justify-content:space-between; gap:12px; color:var(--muted)}
+  #bTip .r b{font-weight:600}
+  #bTip .live{color:var(--accent); font-size:11px; margin-top:5px}
+
+  #bLegend{
+    flex:none; display:flex; align-items:center; gap:16px; padding:6px 14px;
+    background:var(--panel); border-top:1px solid var(--line);
+    font-size:11px; color:var(--muted); flex-wrap:wrap;
+  }
+  #bLegend span{display:inline-flex; align-items:center; gap:6px}
+  #bLegend i{width:9px; height:9px; border-radius:2px; display:inline-block}
+  #bLegend i.livedot{border-radius:50%; background:var(--accent); box-shadow:0 0 7px var(--accent)}
+  #bLegend .hint{margin-left:auto; opacity:.75}
 
   /* ---------- layout ---------- */
   main{flex:1; display:flex; min-height:0; position:relative}
@@ -274,7 +331,6 @@
   @media (max-width:760px){
     header{padding:6px 9px; gap:8px}
     .brand{font-size:14px}
-    .brand #subtitle{display:none}
     /* the sidebar slides over the content instead of stealing half the width */
     aside{
       position:absolute; top:0; bottom:0; left:0; z-index:600; width:min(300px,86vw);
@@ -386,15 +442,39 @@
     background:#c62828; color:#fff; border:none; border-radius:8px; cursor:pointer;
   }
   .fire-dlg button:hover{background:#e53935}
+
+  /* ---------- the building view on a narrow screen ----------
+     The drawer sidebar, header trimming and card reflow are handled by the
+     760px block further up; these are the rules only the 3D stage needs. */
+  @media (max-width:760px){
+    #bBar{padding:5px 9px; gap:8px}
+    #bBar .bgrp button{padding:5px 9px}
+    #bLegend{padding:5px 10px; gap:12px; font-size:10.5px}
+    #bLegend .hint{margin-left:0; flex-basis:100%; opacity:.9}
+  }
+
+  /* A phone on its side has ~390px of height for the whole page, and the frame
+     around the stage was eating a third of it. The colour swatches are the
+     first thing to go -- a red room explains itself; how to drive the thing
+     does not, so the hint stays. */
+  @media (max-height:480px){
+    header{padding:4px 9px}
+    #banner{padding:4px 10px; font-size:12px}
+    #bBar{padding:4px 9px}
+    #bLegend{padding:3px 10px}
+    #bLegend span:not(.hint){display:none}
+    #bLegend .hint{margin-left:0; flex-basis:auto}
+  }
 </style>
 </head>
 <body>
 
 <header>
   <button id="sideToggle" title="Show / hide the sidebar">‹</button>
-  <div class="brand">🏛<span class="bn"> MuseumGuard</span> <span id="subtitle"></span></div>
+  <div class="brand">🏛<span class="bn"> MuseumGuard</span></div>
   <div class="lgroup">
-    <div class="seg" id="viewSeg" title="Switch between live graphs and plain value boxes">
+    <div class="seg" id="viewSeg" title="Switch between the 3D building, live graphs and plain value boxes">
+      <button id="viewBuilding">🏛<span class="lbl"> Building</span></button>
       <button id="viewGraphs" class="on">↗<span class="lbl"> Graphs</span></button>
       <button id="viewSimple">▦<span class="lbl"> Simple</span></button>
     </div>
@@ -439,9 +519,6 @@
       <label class="tog" style="margin-bottom:4px">
         <input type="checkbox" id="anomShow" checked><span>Shade on charts</span>
       </label>
-      <label class="tog" style="margin-bottom:8px">
-        <input type="checkbox" id="anomBand" checked><span>Show expected range</span>
-      </label>
       <div id="anoms"></div>
     </section>
 
@@ -455,6 +532,24 @@
 
   <div id="backdrop" title="Close the sidebar"></div>
 </main>
+
+<!-- 3D building view. The renderer mounts into #bStage; the bar owns
+     everything outside it (floor filter, readout). -->
+<section id="building">
+  <div id="bBar">
+    <span class="bgrp" id="bFloors"></span>
+    <span class="spacer"></span>
+  </div>
+  <div id="bStage"><div id="bTip"></div></div>
+  <div id="bLegend">
+    <span><i style="background:var(--ok)"></i>OK</span>
+    <span><i style="background:var(--warn)"></i>Warning</span>
+    <span><i style="background:var(--alarm)"></i>Alarm</span>
+    <span><i style="background:var(--disc)"></i>No sensors</span>
+    <span><i class="livedot"></i>Live hardware</span>
+    <span class="hint" id="bHint">drag to orbit · wheel to zoom · click a room</span>
+  </div>
+</section>
 
 <div id="taskbar"><span class="tb-lbl">Panels</span></div>
 
@@ -487,19 +582,71 @@
 // State
 // ---------------------------------------------------------------------------
 let BOOT = null, TOKEN = null, COLORS = {}, SCALES = [];
-const charts = new Map();   // key -> Chart
-const wins   = new Map();   // key -> Win
+const charts = new Map();   // key -> Chart   (only the OPEN room's sensors)
+const wins   = new Map();   // key -> Win     (only the OPEN room's sensors)
 let zTop = 10;
 
-// "graphs" = the floating-window workspace, "simple" = colour-coded value boxes
-const VIEW_KEY = "museumguard.view.v1";
+// "building" = the 3D museum, "graphs" = the floating-window workspace,
+// "simple" = colour-coded value boxes. Graphs/Simple show ONE room at a time
+// (the live rig by default); the building view is how you reach the others.
+const VIEW_KEY = "museumguard.view.v2";
+let VIEW = "graphs";
 let SIMPLE = false;
 let layoutStale = false;      // viewport changed while the workspace was hidden
 let STACKED = false;          // phone-sized graphs view: one scrolling column, no floating
 const MQ_MOBILE = window.matchMedia("(max-width:760px)");
 const isMobile = () => MQ_MOBILE.matches;
 
+// Building-wide truth. `charts` only ever holds the room currently open, but
+// the 3D view and the alarm banner must see all 53 sensors, so every reading is
+// recorded here first regardless of which room is on screen.
+const STATES = new Map();   // sensor key -> {value, state}
+const DEFS   = new Map();   // sensor key -> bootstrap sensor def
+let ROOMS = [], ROOMS_BY_ID = new Map(), CURRENT_ROOM = null;
+
+const SEVERITY = {OK:0, WARN:1, STALE:2, ALARM:3, DISCONNECTED:4};
+
+/** Worst state across a room's sensors — this is what colours a room in 3D. */
+function roomState(roomId){
+  const room = ROOMS_BY_ID.get(roomId);
+  if (!room) return "DISCONNECTED";
+  // A room with no sensors is unmonitored, not healthy -- without --demo-rooms
+  // that is 11 of the 12, and painting them green would claim a clean bill of
+  // health for rooms nothing is watching.
+  if (!room.keys.length) return "DISCONNECTED";
+  let worst = "OK";
+  for (const key of room.keys){
+    const st = (STATES.get(key) || {}).state || "DISCONNECTED";
+    if ((SEVERITY[st] ?? 0) > (SEVERITY[worst] ?? 0)) worst = st;
+  }
+  return worst;
+}
+
+function roomOf(key){ return (DEFS.get(key) || {}).room || null; }
+
 const $ = s => document.querySelector(s);
+
+// The bridge the 3D renderer sees. Declared up here (before anything runs) so
+// the renderer script can register itself whenever it finishes loading.
+/* A reading, formatted for a human. On/off sensors read Yes/No: "1 bool" makes
+   the reader translate before they can act on it. */
+function fmtValue(def, value){
+  if (value == null) return "--";
+  if (def && def.unit === "bool") return value >= 0.5 ? "Yes" : "No";
+  return def && def.unit ? `${value} ${def.unit}` : String(value);
+}
+
+window.MG = {
+  rooms: [], building: null,
+  fmt: s => fmtValue(s, s.value),
+  roomState: id => roomState(id),
+  sensorsIn: id => ((ROOMS_BY_ID.get(id) || {}).keys || [])
+                     .map(k => ({...DEFS.get(k), ...STATES.get(k)})),
+  stateOf: key => (STATES.get(key) || {}).state || "DISCONNECTED",
+  color: state => COLORS[state] || "#6e7681",
+  openRoom: id => openRoom(id),
+  register: r => Renderers.register(r),
+};
 const fmtClock = ts => new Date(ts * 1000).toLocaleTimeString();
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 
@@ -508,7 +655,11 @@ const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 // ---------------------------------------------------------------------------
 const ANOMS = new Map();          // id -> record, oldest first (Maps keep order)
 const ANOM_CAP = 200;             // matches the server's retention
-let SHOW_ANOMS = true, SHOW_BAND = true, ANOM_MIN_SEV = "LOW";
+// The learned expected-range band is permanently off -- it was more noise than
+// signal over the alarm thresholds already shaded on every chart. The drawing
+// code is left in place behind this constant rather than ripped out.
+const SHOW_BAND = false;
+let SHOW_ANOMS = true, ANOM_MIN_SEV = "LOW";
 
 const SEV_RANK  = {LOW:0, MEDIUM:1, HIGH:2};
 const SEV_STYLE = {
@@ -517,6 +668,9 @@ const SEV_STYLE = {
   HIGH:   {fill:"rgba(248,81,73,.17)",  line:"#f85149"},
 };
 const sevOK = a => SEV_RANK[a.severity] >= SEV_RANK[ANOM_MIN_SEV];
+// Every anomaly belongs to a sensor, so to a room: inside one, the pane lists
+// only its own. roomOf() is hoisted below; this only runs from handlers.
+const anomInScope = a => !CURRENT_ROOM || roomOf(a.key) === CURRENT_ROOM;
 
 // first index of `arr` with arr[i] >= target (arr is sorted ascending)
 function lowerBoundIn(arr, target){
@@ -774,7 +928,7 @@ class Chart {
         this.tip.style.display="block";
         const hit = SHOW_ANOMS ? this.anomalyAt(this.t[idx]) : null;
         this.tip.innerHTML =
-          `${this.v[idx]} ${d.unit} · ${fmtClock(this.t[idx])}` +
+          `${fmtValue(d, this.v[idx])} · ${fmtClock(this.t[idx])}` +
           (hit ? `<div class="tipa" style="color:${SEV_STYLE[hit.severity].line}">`
                + `${hit.kindLabel} · ${hit.severity} · ${hit.score}σ</div>` : "");
         this.tip.style.left = Math.min(w-this.tip.offsetWidth-6, hx+10) + "px";
@@ -819,10 +973,11 @@ class Chart {
 const wsRect = () => $("#workspace").getBoundingClientRect();
 const GAP = 8, MIN_W = 200, MIN_H = 120;
 const EDGE = 30;             // px from a workspace border that arms a snap
-// v2: the sensor set changed (Gallery dropped), so v1 layouts would restore
-// the surviving windows into their old 8-window slots -- leaving the top half
-// of the workspace empty. Bumping the key retiles everyone once.
-const LS_KEY = "museumguard.layout.v2";
+// One saved arrangement per room -- a 6-sensor jewel vault and a 3-sensor
+// corridor want different tilings, and restoring one over the other looks
+// broken. v2 also retires the pre-Gallery-removal layouts, which would have
+// restored the four surviving windows into their old 8-window slots.
+const LS_KEY = () => `museumguard.layout.v2.${CURRENT_ROOM || "none"}`;
 let layoutCustomised = false;
 
 class Win {
@@ -1039,9 +1194,14 @@ function hideGhost(){ $("#snapGhost").style.display = "none"; }
 // -- layout presets -------------------------------------------------------
 const openWins = () => [...wins.values()].filter(w => !w.closed && !w.minimised);
 
+// The workspace is display:none while the building view is up, and 0-sized in a
+// minimised window. Laying out or saving against that produces a pile of
+// minimum-size windows in the corner -- and worse, persists it.
+function wsUsable(){ const w = wsRect(); return w.width > 80 && w.height > 80; }
+
 function tile(cols){
   if (STACKED) return;                 // CSS owns the geometry while stacked
-  const list = openWins(); if (!list.length) return;
+  const list = openWins(); if (!list.length || !wsUsable()) return;
   const w = wsRect();
   // never ask for more columns than fit at MIN_W -- otherwise setRect clamps the
   // width up while the x positions still assume the narrower cell, and the last
@@ -1082,18 +1242,19 @@ function saveLayout(){
   if (STACKED) return;      // never overwrite the desktop arrangement with the stack
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
+    if (!wsUsable()) return;             // never persist a collapsed layout
     const data = {custom: layoutCustomised,
                   side: document.body.classList.contains("side-collapsed"), w:{}};
     for (const [k, win] of wins){
       data.w[k] = {...win.rect(), z:win.z, min:win.minimised, closed:win.closed,
                    maxed:win.maxed, restore:win.restore};
     }
-    try{ localStorage.setItem(LS_KEY, JSON.stringify(data)); }catch(_){}
+    try{ localStorage.setItem(LS_KEY(), JSON.stringify(data)); }catch(_){}
   }, 250);
 }
 function loadLayout(){
   let data = null;
-  try{ data = JSON.parse(localStorage.getItem(LS_KEY) || "null"); }catch(_){}
+  try{ data = JSON.parse(localStorage.getItem(LS_KEY()) || "null"); }catch(_){}
   if (!data || !data.w) return false;
   if (data.side){
     // collapse without the slide animation, so wsRect() below measures the final width
@@ -1136,31 +1297,30 @@ function markDirty(key){ const c = charts.get(key); if (c) c.dirty = true; }
 // ---------------------------------------------------------------------------
 // Build the UI from the bootstrap payload
 // ---------------------------------------------------------------------------
-// With a single zone the "BASEMENT · " prefix on every label is noise; it comes
-// back on its own if a second zone is ever added to config.SENSORS.
-let MULTI_ZONE = false;
-const zonePrefix = d => MULTI_ZONE ? `${d.zone} · ` : "";
-
-function build(){
-  $("#subtitle").textContent = "Environmental & Security Monitoring";
+function build(sensors){
+  const room = ROOMS_BY_ID.get(CURRENT_ROOM);
   COLORS = BOOT.colors; SCALES = BOOT.timeScales;
-  MULTI_ZONE = new Set(BOOT.sensors.map(d => d.zone)).size > 1;
 
   const ws = $("#workspace"), tiles = $("#tiles"), toggles = $("#toggles"),
         resets = $("#resets"), taskbar = $("#taskbar"), cards = $("#cards");
 
-  for (const d of BOOT.sensors){
+  // Inside a room the zone is usually redundant ("Crown Jewels · Case tilt").
+  // The live room is the exception: its one rig reports under two wire zones,
+  // so there the GALLERY/BASEMENT prefix is still telling you something.
+  const zp = d => (room && room.zones.length > 1) ? `${d.zone} · ` : "";
+
+  for (const d of sensors){
     // ---- status tile ----
     const tile = document.createElement("div");
     tile.className = "tile"; tile.id = "tile-" + d.key;
-    tile.innerHTML = `<span class="nm">${zonePrefix(d)}${d.label}</span><span class="vl">--</span>`;
+    tile.innerHTML = `<span class="nm">${zp(d)}${d.label}</span><span class="vl">--</span>`;
     tiles.appendChild(tile);
 
     // ---- simple-view box ----
     const card = document.createElement("div");
     card.className = "card"; card.id = "card-" + d.key;
     card.innerHTML = `
-      <span class="zone">${d.zone}</span>
+      <span class="zone">${room ? room.name : d.zone}</span>
       <span class="nm">${d.label}</span>
       <span class="val">--</span>
       <div class="crow"><span class="st">--</span><span class="ago"></span></div>`;
@@ -1169,7 +1329,7 @@ function build(){
     // ---- show/hide toggle ----
     const lab = document.createElement("label");
     lab.className = "tog";
-    lab.innerHTML = `<input type="checkbox" data-key="${d.key}" checked><span>${zonePrefix(d)}${d.label}</span>`;
+    lab.innerHTML = `<input type="checkbox" data-key="${d.key}" checked><span>${zp(d)}${d.label}</span>`;
     lab.querySelector("input").addEventListener("change", e => {
       const w = wins.get(d.key);
       if (e.target.checked) w.reopen(); else w.close();
@@ -1179,7 +1339,7 @@ function build(){
     // ---- reset button for latching sensors ----
     if (d.latched){
       const b = document.createElement("button");
-      b.className = "ctl"; b.textContent = `Reset ${zonePrefix(d)}${d.label}`;
+      b.className = "ctl"; b.textContent = `Reset ${zp(d)}${d.label}`;
       b.dataset.zone=d.zone; b.dataset.sensor=d.sensor; b.dataset.action="RESET";
       b.style.width="100%"; b.style.marginBottom="6px";
       resets.appendChild(b);
@@ -1188,7 +1348,7 @@ function build(){
     // ---- taskbar button ----
     const tb = document.createElement("button");
     tb.className = "tb"; tb.dataset.key = d.key;
-    tb.innerHTML = `<span class="tdot"></span><span>${zonePrefix(d)}${d.label}</span>`;
+    tb.innerHTML = `<span class="tdot"></span><span>${zp(d)}${d.label}</span>`;
     taskbar.appendChild(tb);
 
     // ---- window ----
@@ -1196,7 +1356,7 @@ function build(){
     el.className = "win"; el.id = "win-" + d.key;
     el.innerHTML = `
       <div class="win-head">
-        <span class="title" title="${zonePrefix(d)}${d.label}"><span class="zn">${zonePrefix(d)}</span>${d.label}</span>
+        <span class="title" title="${d.zone} · ${d.label}"><span class="zn">${zp(d)}</span>${d.label}</span>
         <span class="reading">--</span>
         <select class="scale" title="Time window">${SCALES.map((s,i)=>
           `<option value="${i}"${i===BOOT.defaultScaleIndex?" selected":""}>${s[0]}</option>`).join("")}</select>
@@ -1242,19 +1402,106 @@ function build(){
     el.querySelector(".liveBtn").addEventListener("click", () => ch.goLive());
   }
 
-  document.querySelectorAll(".ctl").forEach(b =>
-    b.addEventListener("click", () => sendCommand(b.dataset.zone, b.dataset.sensor, b.dataset.action)));
+  // NB: the ARM/DISARM buttons are static sidebar markup that teardown() does
+  // not remove, so binding them here would stack one listener per room opened
+  // and a single click would fire N commands. They are delegated once, below.
 
   // restore the user's last arrangement, else the default 2-column tiling
   if (!loadLayout()) defaultLayout();
 
-  // the server ships them newest-first; replay oldest-first so ANOMS stays
-  // in insertion order and the oldest is the one evicted at the cap
-  seedAnomalies(BOOT);
-
-  (BOOT.events||[]).forEach(e => addLog(e.msg, e.ts));
+  // NB: seedAnomalies() and the event-log replay are NOT called here. build()
+  // now runs once per room opened, and both are building-wide and must happen
+  // exactly once, at boot. openRoom() replays the anomalies that belong to the
+  // room it just built, the same way it replays sensor values.
   setConnected(BOOT.connected);
-  setAuth(false);
+  setAuth(!!TOKEN, AUTH_USER);
+}
+
+// ---------------------------------------------------------------------------
+// Room navigation
+// ---------------------------------------------------------------------------
+/** Drop every per-sensor widget so build() can repopulate for another room. */
+function teardown(){
+  for (const w of wins.values()) w.el.remove();
+  charts.clear(); wins.clear();
+  // #cards belongs to the simple view and is per-room like the rest; paintCard
+  // looks its element up by id, so emptying the container is enough.
+  for (const sel of ["#tiles", "#toggles", "#resets", "#cards"]) $(sel).textContent = "";
+  // the taskbar keeps its "Panels" label and loses only the per-sensor buttons
+  $("#taskbar").querySelectorAll(".tb").forEach(b => b.remove());
+  layoutCustomised = false;
+}
+
+function openRoom(roomId){
+  const room = ROOMS_BY_ID.get(roomId);
+  if (!room) return showBuilding();
+  teardown();
+  CURRENT_ROOM = roomId;
+  // Reveal the workspace BEFORE building: the default tiling measures
+  // #workspace, and while the building view is up it is display:none and
+  // measures 0x0 -- every window would be laid out into nothing.
+  // `simple` hides the workspace as well, so it comes off for the build too
+  // and applyDashView() puts it back once the windows have real geometry.
+  document.body.classList.remove("view-building", "simple");
+  Renderers.stop();
+  build(BOOT.sensors.filter(d => d.room === roomId));
+  // replay the current state so the room shows live values immediately rather
+  // than "--" until each sensor's next sample arrives
+  for (const d of BOOT.sensors){
+    if (d.room !== roomId) continue;
+    const st = STATES.get(d.key);
+    if (st && st.value != null) setSensor(d.key, st.value, st.state);
+  }
+  // ANOMS is building-wide and outlives any one room; the per-chart overlays
+  // are rebuilt with the charts, so hand this room's anomalies back to them
+  for (const rec of ANOMS.values()){
+    const ch = charts.get(rec.key);
+    if (ch) ch.setAnomaly(rec);
+  }
+  refreshBanner();          // banner, log and anomaly pane all scope to it now
+  renderLog();
+  renderAnoms();
+  // Opening a room means we left the building view; come back to whichever
+  // dashboard view was last in use rather than always to Graphs.
+  VIEW = LAST_DASH_VIEW;
+  applyDashView();
+  setHash(`#/room/${roomId}`);
+}
+
+function showBuilding(){
+  CURRENT_ROOM = null;
+  VIEW = "building";
+  syncViewButtons();
+  renderLog();              // ...and building-wide again on the way out
+  renderAnoms();
+  refreshBanner();          // ...and building-wide again on the way out
+  document.body.classList.add("view-building");
+  Renderers.start();
+  setHash("#/building");
+}
+
+let _muteHash = false;
+function setHash(h){
+  if (location.hash === h) return;
+  _muteHash = true;                       // our own write must not re-trigger routing
+  location.hash = h;
+  setTimeout(() => { _muteHash = false; }, 0);
+}
+
+function route(){
+  if (_muteHash) return;
+  const h = location.hash || "";
+  const m = /^#\/room\/([A-Za-z0-9_]+)$/.exec(h);
+  if (m && ROOMS_BY_ID.has(m[1])){
+    if (m[1] !== CURRENT_ROOM) openRoom(m[1]);
+    return;
+  }
+  if (h === "#/building"){ setView("building", true); return; }
+  // No (or unknown) hash: the dashboard is the landing page, not the museum.
+  // Phones start on Simple -- floating windows are unusable there.
+  let saved = null;
+  try{ saved = localStorage.getItem(VIEW_KEY); }catch(_){}
+  setView(saved || (isMobile() ? "simple" : "graphs"), true);
 }
 
 function seedAnomalies(boot){
@@ -1279,16 +1526,15 @@ function setSensor(key, value, state){
   const el = document.getElementById("win-"+key);
   el.style.borderTopColor = col;
   const rd = el.querySelector(".reading");
-  rd.textContent = `${value} ${ch.def.unit}`; rd.style.color = col;
+  rd.textContent = fmtValue(ch.def, value); rd.style.color = col;
   const tile = document.getElementById("tile-"+key);
   tile.style.borderLeftColor = col;
   const vl = tile.querySelector(".vl");
-  vl.textContent = `${value} · ${state}`; vl.style.color = col;
+  vl.textContent = `${fmtValue(ch.def, value)} · ${state}`; vl.style.color = col;
   const dot = document.querySelector(`.tb[data-key="${key}"] .tdot`);
   if (dot) dot.style.background = col;
   paintCard(key, state, value, Date.now() / 1000);
 
-  if (key === "BASEMENT.FIRE") updateFire(value, state);
 }
 
 // Center-screen fire popup. Shows while the fire sensor is in ALARM; the ack
@@ -1377,47 +1623,102 @@ function syncStacked(){
   else layoutStale = true;      // the saved rects went stale while CSS held the geometry
 }
 
-function setView(v, initial){
-  const simple = v === "simple";
-  if (simple === SIMPLE && !initial) return;
+// Graphs and Simple are two ways of drawing ONE room; Building is the overview
+// you pick a room from. `LAST_DASH_VIEW` remembers which of the two to come
+// back to, so a trip through the building view does not reset your choice.
+let LAST_DASH_VIEW = "graphs";
+
+function syncViewButtons(){
+  $("#viewBuilding").classList.toggle("on", VIEW === "building");
+  $("#viewGraphs").classList.toggle("on", VIEW === "graphs");
+  $("#viewSimple").classList.toggle("on", VIEW === "simple");
+}
+
+/** Apply the graphs/simple half of the state to a room that is already open. */
+function applyDashView(){
+  const simple = VIEW === "simple";
   SIMPLE = simple;
   document.body.classList.toggle("simple", simple);
-  $("#viewSimple").classList.toggle("on", simple);
-  $("#viewGraphs").classList.toggle("on", !simple);
-  try{ localStorage.setItem(VIEW_KEY, v); }catch(_){}
+  syncViewButtons();
   syncStacked();
-  if (!simple){
+  if (simple){
+    layoutStale = true;      // rects go stale while the workspace is hidden
+  } else {
     // the workspace could not be measured while it was hidden, so re-fit first
     if (!STACKED && layoutStale){ layoutCustomised ? clampAll() : tile(2); layoutStale = false; }
     for (const c of charts.values()) c.dirty = true;
   }
+}
+
+function defaultRoomId(){
+  const live = ROOMS.find(r => r.live);
+  return (live || ROOMS[0] || {}).id || null;
+}
+
+function setView(v, initial){
+  if (v !== "building" && v !== "simple") v = "graphs";
+  if (v === VIEW && !initial) return;
+  try{ localStorage.setItem(VIEW_KEY, v); }catch(_){}
+
+  if (v === "building"){
+    VIEW = "building";
+    SIMPLE = false;
+    document.body.classList.remove("simple");
+    syncStacked();
+    syncViewButtons();
+    showBuilding();
+    if (isMobile()) closeSidebar();
+    return;
+  }
+
+  LAST_DASH_VIEW = VIEW = v;
+  // No room open yet (first load, or coming out of the building view) -- land
+  // on the live rig. openRoom() applies the dash view itself once it has built.
+  if (!CURRENT_ROOM) openRoom(defaultRoomId());
+  else applyDashView();
   if (isMobile()) closeSidebar();
 }
 
+$("#viewBuilding").addEventListener("click", () => setView("building"));
 $("#viewGraphs").addEventListener("click", () => setView("graphs"));
 $("#viewSimple").addEventListener("click", () => setView("simple"));
 
 let SYSTEM_ARMED = true;
 let _bannerKey = null;
 function refreshBanner(){
-  const alarming = [...charts.entries()].filter(([,c]) => c.state === "ALARM")
-                     .map(([k]) => k.split(".")[0]);
-  const key = (SYSTEM_ARMED ? "A:" : "D:") + [...new Set(alarming)].sort().join(",");
+  // Read from STATES, not `charts`: `charts` only holds the open room.
+  //
+  // In the building view the banner is building-wide -- an alarm two floors up
+  // must still reach you. Inside a room it is scoped to that room: while
+  // someone is being walked through one dashboard, a simulated alarm in a
+  // gallery they are not looking at is an interruption, not information.
+  const rooms = new Set();
+  for (const [key, st] of STATES){
+    if (st.state !== "ALARM") continue;
+    const r = roomOf(key);
+    if (!r || (CURRENT_ROOM && r !== CURRENT_ROOM)) continue;
+    rooms.add(r);
+  }
+  const names = [...rooms].sort()
+    .map(r => (ROOMS_BY_ID.get(r) || {}).name || r).join(", ");
+  const key = (SYSTEM_ARMED ? "A:" : "D:") + (CURRENT_ROOM || "*") + ":" + names;
   if (key === _bannerKey) return;      // only touch the DOM when it changes
   _bannerKey = key;
   const b = $("#banner");
-  const alarmKey = [...new Set(alarming)].sort().join(",");
   // Disarmed outranks the alarm: while the system is suppressed the banner is
   // amber whatever is firing, so nobody reads a flashing red bar as "we are
   // responding to this". Re-arming re-runs this against the *current* states,
   // so it goes red again only if something is still in ALARM right then.
   if (!SYSTEM_ARMED){
     b.className = "disarmed";
-    b.textContent = alarmKey
-      ? "System disarmed — alarm suppressed: " + alarmKey
+    b.textContent = names
+      ? "System disarmed — alarm suppressed: " + names
       : "System disarmed (alarms suppressed for maintenance)";
   }
-  else if (alarmKey){ b.className = "alarm"; b.textContent = "⚠  ACTIVE ALARM: " + alarmKey; }
+  else if (names){
+    b.className = "alarm";
+    b.textContent = `⚠  ACTIVE ALARM: ${names}`;
+  }
   else { b.className=""; b.textContent = "All clear"; }
 }
 
@@ -1427,6 +1728,8 @@ function setConnected(on){
   // narrow phones hide the word, so the dot needs to carry it in its tooltip
   $("#connPill").title = on ? "Connected to the sensor stream"
                             : "Disconnected from the sensor stream";
+  // grey out the whole building, not just the open room's charts
+  if (!on) for (const [key, s] of STATES) STATES.set(key, {...s, state:"DISCONNECTED"});
   if (!on) for (const [key, ch] of charts){
     ch.state = "DISCONNECTED"; ch.dirty = true;
     const el = document.getElementById("win-"+key);
@@ -1452,9 +1755,11 @@ async function resync(){
 
   const restarted = boot.bootId !== BOOT.bootId;
   BOOT = boot; COLORS = boot.colors; SCALES = boot.timeScales;
+  ingestBuilding(boot);
   SYSTEM_ARMED = boot.armed !== false;
 
   for (const d of boot.sensors){
+    STATES.set(d.key, {value: d.value, state: d.state});
     const ch = charts.get(d.key);
     if (!ch) continue;
     // the server's ring buffer is the truth; replacing (not appending) also
@@ -1474,7 +1779,7 @@ async function resync(){
 
   if (restarted){
     $("#log").textContent = "";          // the old process's log is history now
-    (boot.events||[]).forEach(e => addLog(e.msg, e.ts));
+    (boot.events||[]).forEach(e => addLog(e.msg, e.ts, e.room));
     if (TOKEN) setAuth(false);           // tokens die with the process
     addLog("Server restarted — dashboard resynced.");
   } else {
@@ -1483,11 +1788,32 @@ async function resync(){
   setConnected(boot.connected);
 }
 
-function addLog(msg, ts){
+// The log is kept as records, not appended text, because the room you are in
+// filters it: inside a room you see that room's events, plus everything
+// system-wide (logins, ARM/DISARM, the link dropping) which belongs to no room
+// and would be odd to hide. The building view shows the lot.
+const EVENTS = [];
+const EVENT_CAP = 300;
+const eventInScope = e => !CURRENT_ROOM || !e.room || e.room === CURRENT_ROOM;
+const logLine = e =>
+  `[${new Date(e.ts * 1000).toLocaleTimeString()}] ${e.msg}\n`;
+
+function addLog(msg, ts, room){
+  const e = {ts: ts || Date.now() / 1000, msg, room: room || null};
+  EVENTS.push(e);
+  if (EVENTS.length > EVENT_CAP) EVENTS.splice(0, EVENTS.length - EVENT_CAP);
+  if (!eventInScope(e)) return;
   const el = $("#log");
   const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 30;
-  el.textContent += `[${new Date((ts||Date.now()/1000)*1000).toLocaleTimeString()}] ${msg}\n`;
+  el.textContent += logLine(e);
   if (atBottom) el.scrollTop = el.scrollHeight;
+}
+
+/** Rebuild the whole log for the room now on screen. */
+function renderLog(){
+  const el = $("#log");
+  el.textContent = EVENTS.filter(eventInScope).map(logLine).join("");
+  el.scrollTop = el.scrollHeight;
 }
 
 // ---------------------------------------------------------------------------
@@ -1515,19 +1841,20 @@ const esc = s => String(s).replace(/[&<>"]/g, c =>
 
 function renderAnoms(){
   const box = $("#anoms");
-  const shown = [...ANOMS.values()].filter(sevOK)
+  const inRoom = [...ANOMS.values()].filter(anomInScope);
+  const shown = inRoom.filter(sevOK)
                   .sort((a,b) => b.t1 - a.t1 || b.id - a.id)
                   .slice(0, 50);
 
   const openN = shown.filter(a => a.open).length;
   $("#anomCount").textContent = openN ? `${shown.length} · ${openN} live` : shown.length;
   const pill = $("#anomPill");
-  $("#anomPillN").textContent = ANOMS.size;
-  pill.classList.toggle("quiet", ANOMS.size === 0);
+  $("#anomPillN").textContent = inRoom.length;
+  pill.classList.toggle("quiet", inRoom.length === 0);
 
   if (!shown.length){
-    box.innerHTML = `<div class="empty">${ANOMS.size ? "None at this severity."
-                                                    : "Nothing unusual so far."}</div>`;
+    box.innerHTML = `<div class="empty">${inRoom.length ? "None at this severity."
+                                                       : "Nothing unusual so far."}</div>`;
     return;
   }
   box.innerHTML = shown.map(a => `
@@ -1565,10 +1892,6 @@ $("#anomShow").addEventListener("change", e => {
   SHOW_ANOMS = e.target.checked;
   for (const ch of charts.values()) ch.dirty = true;
 });
-$("#anomBand").addEventListener("change", e => {
-  SHOW_BAND = e.target.checked;
-  for (const ch of charts.values()) ch.dirty = true;
-});
 $("#anomFilter").addEventListener("change", e => {
   ANOM_MIN_SEV = e.target.value;
   for (const ch of charts.values()) ch.dirty = true;
@@ -1582,8 +1905,11 @@ $("#anomPill").addEventListener("click", () => {
 // ---------------------------------------------------------------------------
 // Auth + commands
 // ---------------------------------------------------------------------------
+let AUTH_USER = null;
 function setAuth(on, user){
   TOKEN = on ? TOKEN : null;
+  AUTH_USER = on ? (user || AUTH_USER) : null;
+  user = AUTH_USER;
   const s = $("#authState");
   s.className = on ? "on" : "";
   s.textContent = on ? `Logged in as ${user} — overrides enabled`
@@ -1634,6 +1960,14 @@ $("#loginForm").addEventListener("submit", async e => {
 // ---------------------------------------------------------------------------
 $("#resetLayout").addEventListener("click", () => defaultLayout());
 
+// One delegated handler for every override control -- the static ARM/DISARM
+// pair and the per-sensor Reset buttons that build() recreates for each room.
+document.querySelector("aside").addEventListener("click", e => {
+  const b = e.target.closest(".ctl");
+  if (!b || b.disabled) return;
+  sendCommand(b.dataset.zone, b.dataset.sensor, b.dataset.action);
+});
+
 function syncSideGlyph(){
   const c = document.body.classList.contains("side-collapsed");
   $("#sideToggle").textContent = isMobile() ? (c ? "☰" : "✕") : (c ? "›" : "‹");
@@ -1654,7 +1988,7 @@ $("#sideToggle").addEventListener("click", () => {
 $("#backdrop").addEventListener("click", closeSidebar);
 
 function clampAll(){
-  if (STACKED) return;
+  if (STACKED || !wsUsable()) return;
   const w = wsRect();
   for (const win of wins.values()){
     if (win.maxed){ win.setRect({x:GAP, y:GAP, w:w.width-2*GAP, h:w.height-2*GAP}); continue; }
@@ -1671,8 +2005,10 @@ window.addEventListener("resize", () => {
   clearTimeout(rzTimer);
   rzTimer = setTimeout(() => {
     syncStacked();
-    // wsRect() is 0x0 while the workspace is hidden, and the stack lays itself out
-    if (SIMPLE || STACKED){ layoutStale = true; return; }
+    // wsRect() is 0x0 whenever the workspace is hidden -- the building view,
+    // the simple view -- and re-tiling against that would save a ruined
+    // layout. The stacked column lays itself out in CSS either way.
+    if (!CURRENT_ROOM || SIMPLE || STACKED){ layoutStale = true; return; }
     layoutCustomised ? clampAll() : tile(2);
   }, 120);
 });
@@ -1680,23 +2016,135 @@ window.addEventListener("resize", () => {
 // ---------------------------------------------------------------------------
 // Boot: load state, then stream
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// 3D renderer
+//
+// building-css3d.js registers itself here. It is one object:
+//
+//     { name, label, bytes,
+//       mount(stageEl), unmount(), update(), setFloor(id|null) }
+//
+// `update()` runs on every animation frame while the building is on screen;
+// everything else is driven from the bar. The surface is deliberately this
+// small: the renderer never touches the dashboard, and the page never reaches
+// into the scene.
+// ---------------------------------------------------------------------------
+const Renderers = {
+  active: null,
+  running: false,
+  _raf: 0,
+
+  register(r){
+    this.active = r;
+    window.MG.renderer = r;      // handy from the console: MG.renderer.update()
+    // the renderer script may land after the building view is already up
+    if (this.running) this.mount();
+  },
+
+  mount(){
+    const r = this.active;
+    if (!r || r.mounted) return;
+    r.mounted = true;
+    r.mount($("#bStage"));
+    r.setFloor(FLOOR_FILTER);
+  },
+
+  start(){
+    if (this.running) return;
+    this.running = true;
+    this.mount();
+    const loop = () => {
+      if (!this.running) return;
+      if (this.active) this.active.update();
+      this._raf = requestAnimationFrame(loop);
+    };
+    this._raf = requestAnimationFrame(loop);
+  },
+
+  stop(){
+    this.running = false;
+    cancelAnimationFrame(this._raf);
+    if (this.active && this.active.mounted){
+      this.active.mounted = false;
+      this.active.unmount();
+    }
+  },
+
+};
+
+let FLOOR_FILTER = null;   // null = show all floors
+
+function buildBar(){
+  // floor tabs, top floor first so they read like a building
+  const tabs = $("#bFloors");
+  const floors = [...BOOT.building.floors].sort((a,b) => b.level - a.level);
+  const mk = (id, text, title) => {
+    const b = document.createElement("button");
+    b.textContent = text; b.title = title; b.dataset.f = id ?? "";
+    b.addEventListener("click", () => {
+      FLOOR_FILTER = (FLOOR_FILTER === id) ? null : id;
+      tabs.querySelectorAll("button").forEach(x =>
+        x.classList.toggle("on", (x.dataset.f || null) === FLOOR_FILTER));
+      if (Renderers.active) Renderers.active.setFloor(FLOOR_FILTER);
+    });
+    tabs.appendChild(b);
+  };
+  mk(null, "All floors", "Show every floor");
+  for (const f of floors) mk(f.id, f.name, `Isolate ${f.name}`);
+  tabs.querySelector("button").classList.add("on");
+
+  // name the instrument actually in the visitor's hand
+  if (matchMedia("(pointer: coarse)").matches)
+    $("#bHint").textContent = "one finger to orbit · pinch to zoom · tap a room";
+}
+
+/** Index the building payload: rooms, their sensor keys, and floor names. */
+function ingestBuilding(boot){
+  const b = boot.building;
+  DEFS.clear();
+  for (const d of boot.sensors) DEFS.set(d.key, d);
+
+  const floorName = Object.fromEntries(b.floors.map(f => [f.id, f.name]));
+  ROOMS = b.rooms.map(r => ({
+    ...r,
+    floorName: floorName[r.floor] || r.floor,
+    level: (b.floors.find(f => f.id === r.floor) || {}).level || 0,
+    keys: boot.sensors.filter(d => d.room === r.id).map(d => d.key),
+  }));
+  ROOMS_BY_ID = new Map(ROOMS.map(r => [r.id, r]));
+  window.MG.building = b;
+  window.MG.rooms = ROOMS;
+}
+
 (async function(){
   BOOT = await (await fetch("/api/bootstrap")).json();
   SYSTEM_ARMED = BOOT.armed !== false;
   document.title = "MuseumGuard";
-  build();          // always builds with the workspace visible, so it can measure
+  COLORS = BOOT.colors; SCALES = BOOT.timeScales;
+  for (const d of BOOT.sensors) STATES.set(d.key, {value: d.value, state: d.state});
+  ingestBuilding(BOOT);
+  // the server ships them newest-first; replay oldest-first so ANOMS stays
+  // in insertion order and the oldest is the one evicted at the cap
+  seedAnomalies(BOOT);
+  (BOOT.events||[]).forEach(e => addLog(e.msg, e.ts, e.room));
 
-  // Phones get the simple view by default -- floating windows are unusable there.
-  let savedView = null;
-  try{ savedView = localStorage.getItem(VIEW_KEY); }catch(_){}
-  setView(savedView || (isMobile() ? "simple" : "graphs"), true);
+  buildBar();
+  setConnected(BOOT.connected);   // build() also does this, but only once a room is open
   if (isMobile()) document.body.classList.add("side-collapsed");
   syncSideGlyph();
+  window.addEventListener("hashchange", route);
+  route();                        // deep link, else the saved view on the live rig
 
   const es = new EventSource("/api/stream");
   es.onmessage = ev => {
     const m = JSON.parse(ev.data);
     if (m.type === "reading"){
+      // record for the whole building FIRST -- the 3D view and the banner read
+      // this, and they care about rooms that aren't open
+      STATES.set(m.key, {value: m.value, state: m.state});
+      // Building-wide on purpose: the full-screen fire alert must reach you
+      // even while you are looking at a room three floors up.
+      if (m.key === "BASEMENT.FIRE") updateFire(m.value, m.state);
       const ch = charts.get(m.key);
       if (ch){
         ch.push(m.ts, m.value);
@@ -1705,7 +2153,7 @@ window.addEventListener("resize", () => {
       }
     } else if (m.type === "anomaly"){ upsertAnomaly(m.anomaly); }
     else if (m.type === "connection"){ setConnected(m.connected); }
-    else if (m.type === "log"){ addLog(m.msg, m.ts); }
+    else if (m.type === "log"){ addLog(m.msg, m.ts, m.room); }
     else if (m.type === "reset"){
       if (m.key === "BASEMENT.FIRE") endFireEpisode();
       _bannerKey = null; refreshBanner();
@@ -1735,5 +2183,8 @@ window.addEventListener("resize", () => {
   requestAnimationFrame(frame);
 })();
 </script>
+
+<!-- The 3D building view. Plain script, no module graph, no dependencies. -->
+<script src="/static/js/building-css3d.js"></script>
 </body>
 </html>

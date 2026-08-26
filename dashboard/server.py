@@ -36,6 +36,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
 
 import anomaly
+import building
 import config
 import security
 from core import Command
@@ -44,6 +45,18 @@ from transports import HttpIngestSource, SerialSource, SimulatedSource  # noqa: 
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 SESSION_COOKIE = "mg_session"  # gates page/bootstrap/stream access (viewer or guard)
+
+# Windows takes MIME types from the registry, where a stray entry can report
+# .js as text/plain -- browsers then refuse to run <script type="module"> at all
+# (strict MIME checking), which would silently kill the three.js renderer on
+# someone else's laptop. Pin the types that matter.
+MIME_OVERRIDES = {
+    ".js": "text/javascript",
+    ".mjs": "text/javascript",
+    ".css": "text/css",
+    ".html": "text/html; charset=utf-8",
+    ".json": "application/json",
+}
 
 
 def make_source(name: str = "http"):
@@ -72,6 +85,13 @@ class Hub:
     def __init__(self, source_name: str = "http"):
         self.storage = Storage()
         self.source = make_source(source_name)
+        # --demo-rooms with a real transport: the ESP32 owns the four real
+        # sensors, so the simulated museum needs its own ticker running beside
+        # it. `--source sim` already covers every sensor itself, so it gets no
+        # companion -- otherwise both would drive the same rooms.
+        self.demo_source = None
+        if config.DEMO_ROOMS and source_name != "sim":
+            self.demo_source = SimulatedSource(synthetic_only=True, owns_link=False)
         # Learns each stream's normal and flags the windows that break it. It
         # lives here rather than in the browser so every tab sees the same
         # verdicts, and so one opened late still gets what it missed.
@@ -90,12 +110,20 @@ class Hub:
         self.source.reading_received.connect(self._on_reading)
         self.source.connection_changed.connect(self._on_connection)
         self.source.notice.connect(self._on_notice)
+        if self.demo_source is not None:
+            # Readings and notices only: connection state stays the real link's.
+            self.demo_source.reading_received.connect(self._on_reading)
+            self.demo_source.notice.connect(self._on_notice)
 
     def start(self) -> None:
         self.source.start()
+        if self.demo_source is not None:
+            self.demo_source.start()
 
     def stop(self) -> None:
         self.source.stop()
+        if self.demo_source is not None:
+            self.demo_source.stop()
         self.storage.close()
 
     # -- fan-out ----------------------------------------------------------
@@ -138,21 +166,39 @@ class Hub:
             if not record["open"]:
                 self._log(f"ANOMALY [{record['zone']}·{record['label']}] "
                           f"{record['kindLabel']} ({record['severity']}) — "
-                          f"{record['message']}")
+                          f"{record['message']}",
+                          room=config.SENSORS_BY_KEY[record["key"]].room)
         if prev is not None:
-            unit = config.SENSORS_BY_KEY[reading.key].unit
-            self._log(f"[{reading.zone}·{reading.sensor}] {prev} → {reading.state}"
-                      f" ({reading.value:g} {unit})")
+            sdef = config.SENSORS_BY_KEY[reading.key]
+            # Every transition matters on the real rig. For the 48 simulated
+            # sensors only report alarms, or their ordinary OK<->WARN flapping
+            # buries the real room's log.
+            if not sdef.synthetic or reading.state == config.STATE_ALARM:
+                where = sdef.room if sdef.synthetic else reading.zone
+                self._log(f"[{where}·{reading.sensor}] {prev} → {reading.state}"
+                          f" ({reading.value:g} {sdef.unit})", room=sdef.room)
 
     def _on_connection(self, connected: bool) -> None:
         self.connected = connected
         self._broadcast("connection", {"connected": connected})
 
     def _on_notice(self, msg: str) -> None:
-        self._log(msg)
+        # Sources emit plain strings, but the scripted incidents prefix theirs
+        # with the room id ("[G_LOBBY] case disturbed -- simulated incident.").
+        # Recover it so those lines file under the room they happened in;
+        # anything else is system-wide.
+        room = None
+        if msg.startswith("["):
+            token = msg[1:].split("]", 1)[0]
+            if token in building.ROOMS_BY_ID:
+                room = token
+        self._log(msg, room=room)
 
-    def _log(self, msg: str) -> None:
-        entry = {"ts": time.time(), "msg": msg}
+    def _log(self, msg: str, room: str | None = None) -> None:
+        """`room` scopes the line to one room in the UI's event log. Leave it
+        None for anything system-wide (logins, ARM/DISARM, the link going down)
+        -- those stay visible whichever room you are standing in."""
+        entry = {"ts": time.time(), "msg": msg, "room": room}
         self._events.append(entry)
         del self._events[:-200]
         self._broadcast("log", entry)
@@ -163,10 +209,16 @@ class Hub:
         for s in config.SENSORS:
             buf = self.storage.buffers[s.key]
             times, values = buf.arrays()
+            # The real rig ships its full hour of history; 48 simulated sensors
+            # doing the same would put tens of MB of fiction in this JSON.
+            if s.synthetic:
+                times = times[-config.BOOTSTRAP_SYNTH_POINTS:]
+                values = values[-config.BOOTSTRAP_SYNTH_POINTS:]
             sensors.append({
                 "key": s.key, "zone": s.zone, "sensor": s.sensor, "label": s.label,
                 "unit": s.unit, "warn": s.warn, "alarm": s.alarm,
                 "vmin": s.vmin, "vmax": s.vmax, "latched": s.latched,
+                "room": s.room, "synthetic": s.synthetic,
                 "history": {"t": times, "v": values},
                 "state": buf.last_state or config.STATE_DISCONNECTED,
                 "value": buf.last_value,
@@ -177,6 +229,15 @@ class Hub:
             "bootId": self.boot_id,
             "appTitle": config.APP_TITLE,
             "sensors": sensors,
+            "building": {
+                "floors": building.FLOORS,
+                "rooms": [r.to_json() for r in building.ROOMS],
+                "floorW": building.FLOOR_W,
+                "floorD": building.FLOOR_D,
+                "wallH": building.WALL_H,
+                "liveRoom": config.LIVE_ROOM,
+                "shell": building.SHELL,
+            },
             "colors": config.STATE_COLORS,
             "timeScales": config.TIME_SCALES,
             "defaultScaleIndex": config.DEFAULT_TIME_SCALE_INDEX,
@@ -221,7 +282,12 @@ class Hub:
         if not entry or entry["role"] != "guard":
             return False
         user = entry["user"]
-        self.source.send_command(Command(zone, sensor, action))
+        cmd = Command(zone, sensor, action)
+        self.source.send_command(cmd)
+        if self.demo_source is not None:
+            # ARM/DISARM applies everywhere; a RESET only matters to whichever
+            # source owns that sensor, and each ignores keys it does not have.
+            self.demo_source.send_command(cmd)
         if zone == "SYSTEM" and sensor == "ALL" and action in ("ARM", "DISARM"):
             self.armed = action == "ARM"
             self._broadcast("system", {"armed": self.armed})
@@ -232,7 +298,11 @@ class Hub:
             # observes a non-ALARM sample it could infer the boundary from.
             self._broadcast("reset", {"key": f"{zone}.{sensor}"})
         self.storage.record_audit(user, action, f"{zone}.{sensor}")
-        self._log(f"AUDIT: {user} issued {action} {zone}.{sensor}")
+        # An override aimed at one sensor files under its room; SYSTEM/ALL
+        # (ARM/DISARM) is building-wide and stays unscoped.
+        target = config.SENSORS_BY_KEY.get(f"{zone}.{sensor}")
+        self._log(f"AUDIT: {user} issued {action} {zone}.{sensor}",
+                  room=target.room if target else None)
         return True
 
     def ingest(self, payload: dict) -> str:
@@ -371,7 +441,9 @@ class Handler(BaseHTTPRequestHandler):
         full = os.path.normpath(os.path.join(STATIC_DIR, rel))
         if not full.startswith(STATIC_DIR) or not os.path.isfile(full):
             return self._send_json({"error": "not found"}, 404)
-        ctype = mimetypes.guess_type(full)[0] or "application/octet-stream"
+        ctype = MIME_OVERRIDES.get(os.path.splitext(full)[1].lower())
+        if ctype is None:
+            ctype = mimetypes.guess_type(full)[0] or "application/octet-stream"
         with open(full, "rb") as fh:
             body = fh.read()
         self.send_response(200)
@@ -414,7 +486,18 @@ def main() -> int:
     parser.add_argument("--source", choices=["http", "sim", "serial"], default="http",
                         help="data source: http=ESP32 WiFi (default), "
                              "sim=fake data no hardware, serial=USB/Bluetooth Arduino")
+    parser.add_argument("--demo-rooms", action="store_true",
+                        help="populate the 11 simulated museum rooms in the 3D "
+                             "building view (49 fake sensors + scripted "
+                             "incidents). Off by default: without it every "
+                             "reading on the dashboard is a real measurement.")
     args = parser.parse_args()
+
+    # Must happen before Hub(): Storage allocates one ring buffer per sensor.
+    if args.demo_rooms:
+        added = config.enable_demo_rooms()
+        print(f"Demo rooms ON -- {added} simulated sensors across "
+              f"{len(building.ROOMS) - 1} fictional rooms.")
 
     HUB = Hub(args.source)
     HUB.start()

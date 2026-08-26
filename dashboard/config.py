@@ -7,6 +7,8 @@ one-file job.
 """
 from __future__ import annotations
 
+import building
+
 # --------------------------------------------------------------------------
 # Sensor / zone model
 # --------------------------------------------------------------------------
@@ -41,7 +43,9 @@ STATE_COLORS = {
 # means an alarm stays until an explicit reset/override (water, motion).
 class SensorDef:
     def __init__(self, key, zone, label, unit, warn, alarm,
-                 vmin, vmax, latched=False, period_s=2.0, detect_anomalies=True):
+                 vmin, vmax, latched=False, period_s=2.0,
+                 room=None, synthetic=False, kind="analog",
+                 detect_anomalies=True):
         self.key = key            # unique id, e.g. "BASEMENT.TEMP"
         self.zone = zone
         self.label = label
@@ -52,10 +56,16 @@ class SensorDef:
         self.vmax = vmax
         self.latched = latched
         self.period_s = period_s
+        # `room` is a DISPLAY grouping for the 3D building view; `zone` stays the
+        # wire token the node sends, so adding rooms never touched the protocol.
+        self.room = room or zone
+        # synthetic = simulated demo room, never written to SQLite/CSV
+        self.synthetic = synthetic
+        self.kind = kind          # "analog" (wanders) or "event" (blips)
         # Whether anomaly.py should watch this stream. Set False for on/off
         # sensors: a 0/1 signal has no "normal spread" to learn, so every trip
-        # would score as an infinite deviation. All four current sensors are
-        # continuous, so none of them need it -- kept for the next on/off one.
+        # would score as an infinite deviation. All four real sensors are
+        # continuous; the simulated on/off ones opt out below.
         self.detect_anomalies = detect_anomalies
 
     @property
@@ -69,21 +79,94 @@ class SensorDef:
 # and motion in the exhibition hall) was dropped: no firmware ever sent it, so
 # its tiles only ever showed DISCONNECTED. Adding a second zone back is just
 # more entries here plus a ZONE_ALIASES line -- nothing else is zone-aware.
+#
+# The scenario puts the physical rig in one basement room of the 3D building,
+# hence room=LIVE_ROOM on all four. These are the only NON-synthetic sensors;
+# the simulated museum rooms are opt-in, see enable_demo_rooms() below.
+LIVE_ROOM = "B1_ARCHIVE"
+
 SENSORS = [
     SensorDef("BASEMENT.WATER",   "BASEMENT", "Water level", "adc",
-              warn=(None, 100), alarm=(None, 300), vmin=0, vmax=600, latched=True, period_s=2.0),
+              warn=(None, 100), alarm=(None, 300), vmin=0, vmax=600, latched=True, period_s=2.0,
+              room=LIVE_ROOM),
     SensorDef("BASEMENT.TEMP",     "BASEMENT", "Temperature", "°C",
-              warn=(18, 26), alarm=(15, 30), vmin=10, vmax=40, period_s=3.0),
+              warn=(18, 26), alarm=(15, 30), vmin=10, vmax=40, period_s=3.0, room=LIVE_ROOM),
     SensorDef("BASEMENT.HUMIDITY", "BASEMENT", "Humidity",    "%RH",
-              warn=(40, 60), alarm=(30, 70), vmin=20, vmax=90, period_s=3.0),
+              warn=(40, 60), alarm=(30, 70), vmin=20, vmax=90, period_s=3.0, room=LIVE_ROOM),
     # Fire: potentiometer stand-in (0..100). Upper danger bound only; latched so
     # a detected fire stays in ALARM until an explicit reset/override.
     SensorDef("BASEMENT.FIRE",     "BASEMENT", "Fire",        "idx",
-              warn=(None, 50), alarm=(None, 70), vmin=0, vmax=100, latched=True, period_s=3.0),
+              warn=(None, 50), alarm=(None, 70), vmin=0, vmax=100, latched=True, period_s=3.0,
+              room=LIVE_ROOM),
 ]
+
+# The four above are the real rig, and by default they are ALL that exists.
+LIVE_SENSORS = list(SENSORS)
 
 SENSORS_BY_KEY = {s.key: s for s in SENSORS}
 ZONES = sorted({s.zone for s in SENSORS})
+
+# --------------------------------------------------------------------------
+# Simulated museum rooms -- opt-in (server.py --demo-rooms)
+# --------------------------------------------------------------------------
+# The 3D building has 12 rooms; exactly one of them (LIVE_ROOM) is the physical
+# rig. The other 11 are fiction, so they are NOT created unless someone asks for
+# them: a default run has four sensors and every reading on the dashboard is a
+# real measurement. With --demo-rooms the rooms are populated from
+# building.ROOMS and the 3D view fills with plausible activity for a demo.
+#
+# This is a startup switch, not a runtime toggle -- Storage allocates a ring
+# buffer per sensor at construction, so it must be decided before the Hub is
+# built. server.py calls this from main() before constructing Hub.
+DEMO_ROOMS = False
+
+
+def enable_demo_rooms() -> int:
+    """Populate the 11 simulated rooms. Returns how many sensors were added.
+
+    Idempotent: calling it twice is a no-op, so an accidental second call
+    cannot double up the sensor list.
+    """
+    global DEMO_ROOMS
+    if DEMO_ROOMS:
+        return 0
+    DEMO_ROOMS = True
+
+    added = 0
+    for room in building.ROOMS:
+        for tok in room.sensors:
+            t = building.SENSOR_TYPES[tok]
+            SENSORS.append(SensorDef(
+                f"{room.id}.{tok}", room.id, t["label"], t["unit"],
+                warn=t["warn"], alarm=t["alarm"], vmin=t["vmin"], vmax=t["vmax"],
+                latched=t["latched"], period_s=t["period_s"],
+                room=room.id, synthetic=True, kind=t["kind"],
+                # same rule as the real rig: an on/off stream has no spread for
+                # anomaly.py to learn from, so only the analog kinds are watched
+                detect_anomalies=(t["kind"] == "analog"),
+            ))
+            added += 1
+
+    SENSORS_BY_KEY.update({s.key: s for s in SENSORS})
+    ZONES[:] = sorted({s.zone for s in SENSORS})
+    return added
+
+
+def fmt_value(sdef: "SensorDef", value: float) -> str:
+    """A reading, formatted for a human.
+
+    On/off sensors read Yes/No -- "1 bool" makes the reader translate before
+    they can act on it. The web UI has the same rule in fmtValue().
+    """
+    if value is None:
+        return "--"
+    if sdef.unit == "bool":
+        return "Yes" if value >= 0.5 else "No"
+    return f"{value:g} {sdef.unit}"
+
+
+def sensors_in_room(room_id: str) -> list[SensorDef]:
+    return [s for s in SENSORS if s.room == room_id]
 
 
 def sensor_lookup(zone: str, sensor: str) -> SensorDef | None:
@@ -129,6 +212,12 @@ def canonical_zone(zone: str) -> str:
 # how much history to keep in memory per sensor (points). At the fastest 0.5s
 # period, 7200 points ~= 1 hour.
 RING_BUFFER_POINTS = 7200
+
+# Simulated rooms get a much shorter history: ~50 sensors x 7200 points is a lot
+# of RAM for data nobody will scroll back through, and the whole lot has to be
+# JSON-encoded on every bootstrap.
+SYNTH_RING_POINTS = 900
+BOOTSTRAP_SYNTH_POINTS = 300
 
 # time-scale presets for the per-panel time-scale selector: (label, seconds or None=all)
 TIME_SCALES = [
