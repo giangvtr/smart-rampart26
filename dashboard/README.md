@@ -8,10 +8,10 @@ login-gated alarm override/disarm, and zero-install local logging.
 Runs today against a built-in **simulator** (no hardware needed); swaps to a real
 Arduino over USB/Bluetooth by changing one line.
 
-The web UI opens on a **see-through 3D museum** — 3 floors, 12 rooms — and you
-click a room to get its dashboard. One room is the real rig; the rest are
-simulated. See **[BUILDING.md](BUILDING.md)**, which also compares the two
-interchangeable 3D renderers (dependency-free CSS 3D vs. vendored three.js).
+The web UI opens on a **see-through 3D museum** — 3 floors, 12 rooms, furnished
+with paintings, statues and display cases — and you click a room to get its
+dashboard. One room is the real rig; the rest are simulated. Drawn with CSS 3D
+transforms, so it downloads nothing. See **[BUILDING.md](BUILDING.md)**.
 
 ## Status
 
@@ -55,12 +55,8 @@ Uses only the Python standard library: no Flask/FastAPI, no npm, no CDN. The
 charts are drawn on plain `<canvas>` with **no charting library**, so it works
 with no internet at the venue. Live data arrives over Server-Sent Events.
 
-The default 3D renderer keeps that promise — it is CSS transforms and downloads
-nothing. The **optional** three.js renderer is vendored into `static/vendor/`
-(committed, so still no internet needed at the venue) and is the one place the
-project has a third-party dependency. Delete that folder and
-`static/js/building-three.js` to drop it; the toggle disables itself and nothing
-else changes.
+The 3D building view keeps that promise too: it is CSS transforms and a single
+656-line script, so it downloads nothing either.
 
 Options: `python server.py --port 9000 --host 0.0.0.0`
 
@@ -167,6 +163,10 @@ decision that never touches the UI:
 - **`security.py`** — PBKDF2 login (+ documented link-auth upgrade path).
 - **`server.py` + `static/index.html`** — the web UI (stdlib HTTP + SSE; canvas
   charts and the window manager both live in `index.html`, no build step).
+- **`building.py` + `static/js/building-css3d.js`** — the 3D building view: all
+  geometry (floors, rooms, furniture, the shell) is data in `building.py`; the
+  renderer only decides how many pixels a metre is worth. See
+  [BUILDING.md](BUILDING.md).
 - **`panels.py` + `app.py`** — the desktop UI (pyqtgraph widgets, main window).
 
 ## Local data logging (no Postgres)

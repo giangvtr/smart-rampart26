@@ -385,9 +385,9 @@ SHELL = {
     # a classical portico projecting from the west face, in front of the Lobby
     "entrance": {
         "floor": "G", "wall": "w", "at": 7.5,
-        "width": 12.0, "depth": 5.5, "columns": 6,
-        "column_r": 0.6, "steps": 3, "rise": 0.45, "run": 1.1,
-        "pediment": 3.0,
+        "width": 12.0, "depth": 5.0, "columns": 6,
+        "column_r": 0.45, "steps": 4, "rise": 0.4, "run": 1.0,
+        "entablature": 1.2, "pediment": 3.6,
     },
     "roof": {"parapet": 1.2, "skylight": [16.0, 9.0]},
 }

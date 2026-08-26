@@ -78,7 +78,7 @@
   .bstat{color:var(--muted); font:11px/1 ui-monospace,SFMono-Regular,Consolas,monospace;
     white-space:nowrap}
 
-  /* the stage is the 3D viewport: perspective for CSS 3D, canvas host for three */
+  /* the stage is the 3D viewport: a perspective root for the CSS 3D scene */
   #bStage{
     flex:1; min-height:0; position:relative; overflow:hidden; cursor:grab;
     background:
@@ -296,8 +296,8 @@
   <div id="workspace"><div id="snapGhost"></div></div>
 </main>
 
-<!-- 3D building view. Two interchangeable renderers mount into #bStage; the
-     toggle in the bar swaps them live so they can be compared side by side. -->
+<!-- 3D building view. The renderer mounts into #bStage; the bar owns
+     everything outside it (floor filter, explode, readout). -->
 <section id="building">
   <div id="bBar">
     <span class="bgrp" id="bFloors"></span>
@@ -305,11 +305,6 @@
     <label class="bgrp" title="Pull the floors apart to see inside">
       Explode <input type="range" id="bExplode" min="0" max="100" value="26">
     </label>
-    <span class="bsep"></span>
-    <span class="bgrp" id="bRenderer" title="Swap the 3D renderer — same data, same geometry">
-      <button data-r="css3d" class="on">CSS 3D</button><button data-r="three" disabled
-        title="Loading three.js…">three.js</button>
-    </span>
     <span class="spacer"></span>
     <span class="bstat" id="bStat"></span>
   </div>
@@ -374,9 +369,8 @@ function roomOf(key){ return (DEFS.get(key) || {}).room || null; }
 
 const $ = s => document.querySelector(s);
 
-// The bridge the two 3D renderers see. Declared up here (before anything runs)
-// so a renderer script can register itself no matter when it finishes loading --
-// the three.js one is an ES module and lands after this classic script.
+// The bridge the 3D renderer sees. Declared up here (before anything runs) so
+// the renderer script can register itself whenever it finishes loading.
 window.MG = {
   rooms: [], building: null,
   roomState: id => roomState(id),
@@ -1225,63 +1219,45 @@ window.addEventListener("resize", () => {
 // Boot: load state, then stream
 // ---------------------------------------------------------------------------
 // ---------------------------------------------------------------------------
-// 3D renderers
+// 3D renderer
 //
-// Two interchangeable implementations of the same view register themselves here
-// (building-css3d.js and building-three.js). Each is an object:
+// building-css3d.js registers itself here. It is one object:
 //
-//     { name, label, mount(stageEl), unmount(), update(), setExplode(t),
-//       setFloor(id|null), available }
+//     { name, label, bytes,
+//       mount(stageEl), unmount(), update(), setExplode(t), setFloor(id|null) }
 //
-// `update()` is called on every animation frame while the building is on
-// screen; everything else is driven from the bar. Keeping the surface this
-// small is what makes the A/B toggle honest -- both get identical geometry,
-// identical colours and identical data.
+// `update()` runs on every animation frame while the building is on screen;
+// everything else is driven from the bar. The surface is deliberately this
+// small: the renderer never touches the dashboard, and the page never reaches
+// into the scene.
 // ---------------------------------------------------------------------------
 const Renderers = {
-  reg: new Map(),
   active: null,
   running: false,
   _raf: 0,
   _frames: 0, _fpsAt: 0, _fps: 0,
 
   register(r){
-    this.reg.set(r.name, r);
-    const btn = document.querySelector(`#bRenderer button[data-r="${r.name}"]`);
-    if (btn){
-      btn.disabled = !r.available;
-      btn.title = r.available ? `Render with ${r.label}` : `${r.label} unavailable`;
-    }
-    // if this is the renderer we're meant to be showing, bring it up now
-    if (this.running && this.wanted() === r.name && this.active !== r) this.select(r.name);
-  },
-
-  wanted(){
-    let saved = null;
-    try{ saved = localStorage.getItem("museumguard.renderer"); }catch(_){}
-    const r = this.reg.get(saved);
-    return (r && r.available) ? saved : "css3d";
-  },
-
-  select(name){
-    const r = this.reg.get(name);
-    if (!r || !r.available || r === this.active) return;
-    if (this.active) this.active.unmount();
     this.active = r;
-    try{ localStorage.setItem("museumguard.renderer", name); }catch(_){}
-    document.querySelectorAll("#bRenderer button")
-      .forEach(b => b.classList.toggle("on", b.dataset.r === name));
+    window.MG.renderer = r;      // handy from the console: MG.renderer.update()
+    // the renderer script may land after the building view is already up
+    if (this.running) this.mount();
+  },
+
+  mount(){
+    const r = this.active;
+    if (!r || r.mounted) return;
+    r.mounted = true;
     r.mount($("#bStage"));
     r.setExplode(+$("#bExplode").value / 100);
     r.setFloor(FLOOR_FILTER);
-    this.stat();          // don't leave the old renderer's readout on screen
+    this.stat();
   },
 
   start(){
     if (this.running) return;
     this.running = true;
-    if (!this.active) this.select(this.wanted());
-    else this.active.mount($("#bStage"));
+    this.mount();
     // measure fps from now, not from page load -- otherwise the first sample
     // divides a handful of frames by the whole lifetime of the tab and reads 0
     this._fpsAt = performance.now(); this._frames = 0;
@@ -1302,15 +1278,18 @@ const Renderers = {
   stop(){
     this.running = false;
     cancelAnimationFrame(this._raf);
-    if (this.active) this.active.unmount();
+    if (this.active && this.active.mounted){
+      this.active.mounted = false;
+      this.active.unmount();
+    }
   },
 
-  /** The A/B readout: fps and what this renderer cost to load. */
+  /** Frame rate, and what the view cost to load. */
   stat(){
     const r = this.active;
     if (!r) return;
     const kb = r.bytes ? `${(r.bytes/1024).toFixed(0)} KB` : "0 KB — no dependencies";
-    $("#bStat").textContent = `${r.label} · ${this._fps} fps · ${kb}`;
+    $("#bStat").textContent = `${this._fps} fps · ${kb}`;
   },
 };
 
@@ -1338,18 +1317,7 @@ function buildBar(){
   $("#bExplode").addEventListener("input", e => {
     if (Renderers.active) Renderers.active.setExplode(+e.target.value / 100);
   });
-  document.querySelectorAll("#bRenderer button").forEach(b =>
-    b.addEventListener("click", () => Renderers.select(b.dataset.r)));
   $("#backBtn").addEventListener("click", showBuilding);
-
-  // If the three.js module never registers (vendor files missing, WebGL
-  // blocked, an ES-module error) say so on the button instead of leaving a
-  // dead control. The CSS 3D variant carries the demo either way.
-  setTimeout(() => {
-    if (Renderers.reg.has("three")) return;
-    const btn = document.querySelector('#bRenderer button[data-r="three"]');
-    if (btn) btn.title = "three.js unavailable — /static/vendor/ missing or WebGL blocked";
-  }, 4000);
 }
 
 /** Index the building payload: rooms, their sensor keys, and floor names. */
@@ -1415,16 +1383,7 @@ function ingestBuilding(boot){
 })();
 </script>
 
-<!-- Variant A: no dependencies at all. Always available. -->
+<!-- The 3D building view. Plain script, no module graph, no dependencies. -->
 <script src="/static/js/building-css3d.js"></script>
-
-<!-- Variant B: three.js, vendored locally so the venue needs no internet.
-     The import map resolves the bare "three" specifier the example modules use.
-     Loaded as a module, so a missing/blocked vendor file degrades to "the
-     three.js button stays disabled" rather than breaking the page. -->
-<script type="importmap">
-{"imports":{"three":"/static/vendor/three.module.js"}}
-</script>
-<script type="module" src="/static/js/building-three.js"></script>
 </body>
 </html>

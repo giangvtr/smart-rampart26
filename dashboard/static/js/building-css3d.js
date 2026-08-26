@@ -1,4 +1,4 @@
-/* MuseumGuard — 3D building view, Variant A: CSS 3D transforms.
+/* MuseumGuard — the 3D building view, drawn with CSS 3D transforms.
  *
  * Zero dependencies. The museum is ordinary DOM inside a `preserve-3d` scene,
  * so the browser does the projection and we get hit-testing, hover and text
@@ -9,12 +9,13 @@
  * context rather than depth-sorting fragments, so at some angles a far wall can
  * paint over a near one. With translucent glass walls that reads as "see
  * through the building", which is the effect we want anyway — but it is not
- * real occlusion, and there is no lighting, shadowing or bloom. See
- * building-three.js for what those buy.
+ * real occlusion, and there is no lighting or shadowing. At 12 rooms that costs
+ * nothing worth having; a WebGL renderer would only start to pay for itself at
+ * an order of magnitude more geometry.
  *
- * Everything drawn here — room boxes, furniture, the shell — comes from
- * building.py via /api/bootstrap, so this and the three.js variant draw exactly
- * the same museum and the comparison stays fair.
+ * Everything drawn here — room boxes, furniture, the shell — is geometry from
+ * building.py, delivered over /api/bootstrap. This file owns no dimensions of
+ * its own beyond how many pixels a metre is worth on screen.
  *
  * Registers itself as `MG.register(...)`; the shell owns the camera-free bar
  * controls (floor filter, explode, renderer toggle).
@@ -33,6 +34,7 @@ const ROOM_Z     = 0.6;         // px a room floats above its floor slab, so
                                 // the two are never coplanar for hit-testing
 const HOVER_LIFT = 10;          // px a room rises under the cursor
 const CLICK_SLOP = 5;           // px of movement still counted as a click
+const LABEL_FADE = [0.06, 0.20]; // explode range over which room labels appear
 
 const state = {
   el: null, scene: null, host: null,
@@ -100,7 +102,7 @@ function box(parent, cls, {x, y, z = 0, w, d, h, colour}){
 
 // --- one-time stylesheet --------------------------------------------------
 // Injected rather than living in index.html so this renderer is self-contained:
-// deleting the two files removes the variant completely.
+// deleting this one file removes the 3D view completely.
 const CSS = `
 #b3d{position:absolute; inset:0; perspective:1700px; perspective-origin:50% 46%}
 #b3d .scene{
@@ -159,12 +161,16 @@ const CSS = `
   position:absolute;
   background:rgba(150,175,205,.12); border-top:1px solid rgba(173,199,229,.5);
 }
-#b3d .step .lid{background:rgba(174,189,210,.20); border-color:rgba(200,222,245,.55)}
-#b3d .step .side{background:rgba(174,189,210,.38)}
+#b3d .step .lid{background:rgba(174,189,210,.22); border-color:rgba(200,222,245,.60)}
+#b3d .step .side{background:rgba(174,189,210,.42)}
+/* the porch roof: a big horizontal slab, so it has to stay glassy or it reads
+   as a solid lid dropped on the building */
+#b3d .arch .lid{background:rgba(195,208,224,.10); border-color:rgba(214,230,250,.85)}
+#b3d .arch .side{background:linear-gradient(rgba(195,208,224,.55), rgba(195,208,224,.34))}
 #b3d .ped{
   position:absolute;
-  background:linear-gradient(rgba(173,199,229,.14), rgba(173,199,229,.42));
-  border:1px solid rgba(200,222,245,.75);
+  background:linear-gradient(rgba(173,199,229,.20), rgba(173,199,229,.52));
+  border:1px solid rgba(214,230,250,.90);
   /* on a stood-up plane the element's CSS bottom is world UP, so apex at 100% */
   clip-path:polygon(0 0, 100% 0, 50% 100%);
 }
@@ -239,6 +245,11 @@ const CSS = `
 }
 
 /* labels counter-rotate so they always face the viewer */
+/* Labels fade out as the stack closes up. With three storeys compressed you are
+   looking through 12 rooms at once and every caption collides -- and the closed
+   stack is the "here is the building" shot, which wants no labels anyway.
+   Hovering still names the room, and a floor filter forces them back on. */
+#b3d .rlabel, #b3d .fname{opacity:var(--labels, 1); transition:opacity .18s ease}
 #b3d .rlabel{
   position:absolute; left:50%; top:50%; white-space:nowrap; pointer-events:none;
   font-size:11.5px; font-weight:600; color:#e6edf3; text-shadow:0 1px 5px #000c;
@@ -356,38 +367,48 @@ function addRoof(g, W, D, H, roof){
 }
 
 /* Steps, a colonnade, an entablature and a pediment, projecting from the west
- * face in front of the Lobby. It is what makes the massing say "museum". */
+ * face in front of the Lobby. It is what makes the massing say "museum" rather
+ * than "office block", so it is the one part of the shell drawn with any care.
+ *
+ * Everything is laid out in floor coordinates with negative x meaning "outside
+ * the building", i.e. the portico hangs off the west edge of the plate. */
 function addEntrance(g, e, H){
-  const y0 = e.at - e.width / 2;
+  const halfW = e.width / 2;
 
-  // steps marching down and outward from the floor plate. Drawn as thin
-  // volumes rather than plates so the treads have a visible riser.
+  // the porch floor itself, flush with the storey slab
+  box(g, "step", {
+    x: -e.depth / 2, y: e.at, z: -0.18,
+    w: e.depth, d: e.width, h: 0.18, colour: "#aebdd2",
+  });
+
+  // A flight of steps below it. Each step is ONE tread -- spanning the whole
+  // porch depth per step, as this first did, turns the flight into a ramp.
   for (let i = 0; i < e.steps; i++){
-    const out = e.depth + (i + 1) * e.run;
-    const pad = (i + 1) * e.run * 0.35;
+    const near = e.depth + i * e.run;
     box(g, "step", {
-      x: -out / 2, y: e.at, z: -(i + 1) * e.rise,
-      w: out, d: e.width + pad * 2, h: e.rise, colour: "#aebdd2",
+      x: -(near + e.run / 2), y: e.at, z: -(i + 1) * e.rise,
+      w: e.run, d: e.width + i * e.run * 0.8, h: e.rise, colour: "#aebdd2",
     });
   }
 
-  // colonnade along the outer edge
+  // colonnade along the outer edge of the porch
   const r = e.column_r;
   for (let i = 0; i < e.columns; i++){
     box(g, "col", {
-      x: -e.depth * 0.68,
-      y: y0 + e.width * (i + 0.5) / e.columns,
-      w: r * 2, d: r * 2, h: H, colour: "#aab4bf",
+      x: -e.depth + r * 1.8,
+      y: e.at - halfW * 0.86 + e.width * 0.86 * (i + 0.5) / e.columns,
+      w: r * 2, d: r * 2, h: H, colour: "#c3d0e0",
     });
   }
 
   // entablature spanning the colonnade, then the pediment on its outer face
-  box(g, "plinth", {
+  const ent = e.entablature || 1.0;
+  box(g, "arch", {
     x: -e.depth / 2, y: e.at, z: H,
-    w: e.depth, d: e.width + 0.8, h: 0.9, colour: "#aab4bf",
+    w: e.depth, d: e.width + 0.8, h: ent, colour: "#c3d0e0",
   });
   plane(g, "ped", {
-    x: -e.depth, y: y0 - 0.4, z: H + 0.9,
+    x: -e.depth, y: e.at - halfW - 0.4, z: H + ent,
     len: e.width + 0.8, h: e.pediment, axis: "y",
   });
 }
@@ -521,7 +542,7 @@ function bindCamera(){
       // the browser retargets the eventual `click` to the capture element, so
       // a listener on the room div itself never fires with a real mouse --
       // which was exactly the bug this replaces. Drag-vs-click is decided on
-      // pointerup instead, the same way the three.js variant does it.
+      // pointerup instead, by how far the pointer travelled.
       room: e.target.closest ? e.target.closest(".room") : null,
     };
     host.classList.add("dragging");
@@ -558,6 +579,13 @@ function bindCamera(){
 
 function applyCamera(){
   const gap = FLOOR_GAP[0] + (FLOOR_GAP[1] - FLOOR_GAP[0]) * state.explode;
+
+  // isolating one floor removes the collisions, so labels stay up regardless
+  const labels = state.floor !== null
+    ? 1
+    : Math.max(0, Math.min(1, (state.explode - LABEL_FADE[0]) /
+                              (LABEL_FADE[1] - LABEL_FADE[0])));
+  state.el.style.setProperty("--labels", labels.toFixed(3));
   state.scene.style.transform =
     `scale(${state.zoom}) rotateX(${state.tilt}deg) rotateZ(${state.spin}deg)`;
 
@@ -610,8 +638,7 @@ function update(){
 MG.register({
   name: "css3d",
   label: "CSS 3D",
-  available: true,
-  bytes: 0,                    // nothing is downloaded for this variant
+  bytes: 0,                    // nothing is downloaded to draw this
 
   mount(host){
     if (!state.el) buildScene(host);
