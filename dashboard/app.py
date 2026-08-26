@@ -138,7 +138,7 @@ class MainWindow(QMainWindow):
     # -- construction helpers ---------------------------------------------
     def _build_sensor_docks(self) -> None:
         prev = None
-        for sdef in config.SENSORS:
+        for sdef in config.LIVE_SENSORS:
             panel = SensorPanel(sdef, self.storage.buffers[sdef.key])
             dock = Dock(f"{sdef.zone} · {sdef.label}", size=(500, 220), closable=True)
             dock.addWidget(panel)
@@ -153,7 +153,7 @@ class MainWindow(QMainWindow):
     def _build_menu(self) -> None:
         view_menu = self.menuBar().addMenu("&View")
         # one toggle action per closable dock -> re-add closed panels
-        for sdef in config.SENSORS:
+        for sdef in config.LIVE_SENSORS:
             act = QAction(f"{sdef.zone} · {sdef.label}", self, checkable=True, checked=True)
             dock = self.docks[sdef.key]
             act.toggled.connect(lambda on, d=dock: self._toggle_dock(d, on))
@@ -226,7 +226,7 @@ class MainWindow(QMainWindow):
             self.conn_label.setText("● DISCONNECTED")
             self.conn_label.setStyleSheet("color: #c62828; font-weight: 600;")
             # reflect the loss of link on every status tile (FR-DASH-7)
-            for sdef in config.SENSORS:
+            for sdef in config.LIVE_SENSORS:
                 last = self.storage.buffers[sdef.key].last_value
                 self.status_panel.update_sensor(
                     sdef.key, last if last is not None else 0, config.STATE_DISCONNECTED

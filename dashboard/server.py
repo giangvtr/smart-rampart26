@@ -35,6 +35,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
 
+import building
 import config
 import security
 from core import Command
@@ -42,6 +43,18 @@ from storage import Storage
 from transports import SerialSource, SimulatedSource  # noqa: F401 (SerialSource for the swap)
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
+
+# Windows takes MIME types from the registry, where a stray entry can report
+# .js as text/plain -- browsers then refuse to run <script type="module"> at all
+# (strict MIME checking), which would silently kill the three.js renderer on
+# someone else's laptop. Pin the types that matter.
+MIME_OVERRIDES = {
+    ".js": "text/javascript",
+    ".mjs": "text/javascript",
+    ".css": "text/css",
+    ".html": "text/html; charset=utf-8",
+    ".json": "application/json",
+}
 
 
 def make_source():
@@ -112,9 +125,14 @@ class Hub:
             "value": reading.value, "state": reading.state, "ts": reading.ts,
         })
         if prev is not None:
-            unit = config.SENSORS_BY_KEY[reading.key].unit
-            self._log(f"[{reading.zone}·{reading.sensor}] {prev} → {reading.state}"
-                      f" ({reading.value:g} {unit})")
+            sdef = config.SENSORS_BY_KEY[reading.key]
+            # Every transition matters on the real rig. For the 48 simulated
+            # sensors only report alarms, or their ordinary OK<->WARN flapping
+            # buries the real room's log.
+            if not sdef.synthetic or reading.state == config.STATE_ALARM:
+                where = sdef.room if sdef.synthetic else reading.zone
+                self._log(f"[{where}·{reading.sensor}] {prev} → {reading.state}"
+                          f" ({reading.value:g} {sdef.unit})")
 
     def _on_connection(self, connected: bool) -> None:
         self.connected = connected
@@ -135,10 +153,16 @@ class Hub:
         for s in config.SENSORS:
             buf = self.storage.buffers[s.key]
             times, values = buf.arrays()
+            # The real rig ships its full hour of history; 48 simulated sensors
+            # doing the same would put tens of MB of fiction in this JSON.
+            if s.synthetic:
+                times = times[-config.BOOTSTRAP_SYNTH_POINTS:]
+                values = values[-config.BOOTSTRAP_SYNTH_POINTS:]
             sensors.append({
                 "key": s.key, "zone": s.zone, "sensor": s.sensor, "label": s.label,
                 "unit": s.unit, "warn": s.warn, "alarm": s.alarm,
                 "vmin": s.vmin, "vmax": s.vmax, "latched": s.latched,
+                "room": s.room, "synthetic": s.synthetic,
                 "history": {"t": times, "v": values},
                 "state": buf.last_state or config.STATE_DISCONNECTED,
                 "value": buf.last_value,
@@ -147,6 +171,15 @@ class Hub:
             "bootId": self.boot_id,
             "appTitle": config.APP_TITLE,
             "sensors": sensors,
+            "building": {
+                "floors": building.FLOORS,
+                "rooms": [r.to_json() for r in building.ROOMS],
+                "floorW": building.FLOOR_W,
+                "floorD": building.FLOOR_D,
+                "wallH": building.WALL_H,
+                "liveRoom": config.LIVE_ROOM,
+                "shell": building.SHELL,
+            },
             "colors": config.STATE_COLORS,
             "timeScales": config.TIME_SCALES,
             "defaultScaleIndex": config.DEFAULT_TIME_SCALE_INDEX,
@@ -254,7 +287,9 @@ class Handler(BaseHTTPRequestHandler):
         full = os.path.normpath(os.path.join(STATIC_DIR, rel))
         if not full.startswith(STATIC_DIR) or not os.path.isfile(full):
             return self._send_json({"error": "not found"}, 404)
-        ctype = mimetypes.guess_type(full)[0] or "application/octet-stream"
+        ctype = MIME_OVERRIDES.get(os.path.splitext(full)[1].lower())
+        if ctype is None:
+            ctype = mimetypes.guess_type(full)[0] or "application/octet-stream"
         with open(full, "rb") as fh:
             body = fh.read()
         self.send_response(200)

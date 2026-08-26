@@ -7,6 +7,8 @@ one-file job.
 """
 from __future__ import annotations
 
+import building
+
 # --------------------------------------------------------------------------
 # Sensor / zone model
 # --------------------------------------------------------------------------
@@ -41,7 +43,8 @@ STATE_COLORS = {
 # means an alarm stays until an explicit reset/override (water, motion).
 class SensorDef:
     def __init__(self, key, zone, label, unit, warn, alarm,
-                 vmin, vmax, latched=False, period_s=2.0):
+                 vmin, vmax, latched=False, period_s=2.0,
+                 room=None, synthetic=False, kind="analog"):
         self.key = key            # unique id, e.g. "GALLERY.TEMP"
         self.zone = zone
         self.label = label
@@ -52,6 +55,12 @@ class SensorDef:
         self.vmax = vmax
         self.latched = latched
         self.period_s = period_s
+        # `room` is a DISPLAY grouping for the 3D building view; `zone` stays the
+        # wire token the node sends, so adding rooms never touched the protocol.
+        self.room = room or zone
+        # synthetic = simulated demo room, never written to SQLite/CSV
+        self.synthetic = synthetic
+        self.kind = kind          # "analog" (wanders) or "event" (blips)
 
     @property
     def sensor(self) -> str:
@@ -59,22 +68,50 @@ class SensorDef:
         return self.key.split(".", 1)[1]
 
 
-# Two zones from the spec: Gallery (exhibition hall) + Basement.
+# Two zones from the spec: Gallery (exhibition hall) + Basement. Both are wired
+# to the ONE physical rig, which the scenario puts in a single basement room --
+# hence room="B1_ARCHIVE" on all five. These are the only non-synthetic sensors.
+LIVE_ROOM = "B1_ARCHIVE"
+
 SENSORS = [
     SensorDef("GALLERY.TEMP",     "GALLERY",  "Temperature", "°C",
-              warn=(18, 24), alarm=(15, 28), vmin=10, vmax=32, period_s=2.0),
+              warn=(18, 24), alarm=(15, 28), vmin=10, vmax=32, period_s=2.0,
+              room=LIVE_ROOM),
     SensorDef("GALLERY.HUMIDITY", "GALLERY",  "Humidity",    "%RH",
-              warn=(45, 55), alarm=(35, 65), vmin=20, vmax=80, period_s=2.0),
+              warn=(45, 55), alarm=(35, 65), vmin=20, vmax=80, period_s=2.0,
+              room=LIVE_ROOM),
     SensorDef("GALLERY.LIGHT",    "GALLERY",  "Light",       "adc",
-              warn=(None, 700), alarm=(None, 900), vmin=0, vmax=1023, period_s=1.0),
+              warn=(None, 700), alarm=(None, 900), vmin=0, vmax=1023, period_s=1.0,
+              room=LIVE_ROOM),
     SensorDef("GALLERY.MOTION",   "GALLERY",  "Motion",      "bool",
-              warn=None, alarm=(None, 0.5), vmin=0, vmax=1, latched=True, period_s=0.5),
+              warn=None, alarm=(None, 0.5), vmin=0, vmax=1, latched=True, period_s=0.5,
+              room=LIVE_ROOM, kind="event"),
     SensorDef("BASEMENT.WATER",   "BASEMENT", "Water level", "adc",
-              warn=(None, 100), alarm=(None, 300), vmin=0, vmax=600, latched=True, period_s=2.0),
+              warn=(None, 100), alarm=(None, 300), vmin=0, vmax=600, latched=True, period_s=2.0,
+              room=LIVE_ROOM),
 ]
+
+# The five above are the real rig. Everything below is the simulated museum:
+# one zone per room, its sensor mix taken from building.ROOMS. Generated rather
+# than written out so re-equipping a room is a one-line edit in building.py.
+LIVE_SENSORS = list(SENSORS)
+
+for _room in building.ROOMS:
+    for _tok in _room.sensors:
+        _t = building.SENSOR_TYPES[_tok]
+        SENSORS.append(SensorDef(
+            f"{_room.id}.{_tok}", _room.id, _t["label"], _t["unit"],
+            warn=_t["warn"], alarm=_t["alarm"], vmin=_t["vmin"], vmax=_t["vmax"],
+            latched=_t["latched"], period_s=_t["period_s"],
+            room=_room.id, synthetic=True, kind=_t["kind"],
+        ))
 
 SENSORS_BY_KEY = {s.key: s for s in SENSORS}
 ZONES = sorted({s.zone for s in SENSORS})
+
+
+def sensors_in_room(room_id: str) -> list[SensorDef]:
+    return [s for s in SENSORS if s.room == room_id]
 
 
 def sensor_lookup(zone: str, sensor: str) -> SensorDef | None:
@@ -87,6 +124,12 @@ def sensor_lookup(zone: str, sensor: str) -> SensorDef | None:
 # how much history to keep in memory per sensor (points). At the fastest 0.5s
 # period, 7200 points ~= 1 hour.
 RING_BUFFER_POINTS = 7200
+
+# Simulated rooms get a much shorter history: ~50 sensors x 7200 points is a lot
+# of RAM for data nobody will scroll back through, and the whole lot has to be
+# JSON-encoded on every bootstrap.
+SYNTH_RING_POINTS = 900
+BOOTSTRAP_SYNTH_POINTS = 300
 
 # time-scale presets for the per-panel combo box: (label, seconds or None=all)
 TIME_SCALES = [

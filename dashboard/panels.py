@@ -156,7 +156,7 @@ class StatusPanel(QWidget):
         layout = QGridLayout(self)
         layout.setContentsMargins(6, 6, 6, 6)
         self.tiles: dict[str, QLabel] = {}
-        for row, sdef in enumerate(config.SENSORS):
+        for row, sdef in enumerate(config.LIVE_SENSORS):
             name = QLabel(f"{sdef.zone} · {sdef.label}")
             tile = QLabel("--")
             tile.setAlignment(Qt.AlignCenter)
@@ -264,7 +264,7 @@ class ControlPanel(QWidget):
         root.addWidget(QLabel("Acknowledge / clear latched alarm:"))
         # per-latching-sensor reset buttons
         self._ack_buttons: list[QPushButton] = []
-        for sdef in config.SENSORS:
+        for sdef in config.LIVE_SENSORS:
             if not sdef.latched:
                 continue
             btn = QPushButton(f"Reset {sdef.zone} · {sdef.label}")

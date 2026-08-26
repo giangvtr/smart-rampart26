@@ -8,6 +8,11 @@ login-gated alarm override/disarm, and zero-install local logging.
 Runs today against a built-in **simulator** (no hardware needed); swaps to a real
 Arduino over USB/Bluetooth by changing one line.
 
+The web UI opens on a **see-through 3D museum** — 3 floors, 12 rooms — and you
+click a room to get its dashboard. One room is the real rig; the rest are
+simulated. See **[BUILDING.md](BUILDING.md)**, which also compares the two
+interchangeable 3D renderers (dependency-free CSS 3D vs. vendored three.js).
+
 ## Status
 
 Working end to end, on simulated data:
@@ -49,6 +54,13 @@ python server.py            # from the dashboard/ folder
 Uses only the Python standard library: no Flask/FastAPI, no npm, no CDN. The
 charts are drawn on plain `<canvas>` with **no charting library**, so it works
 with no internet at the venue. Live data arrives over Server-Sent Events.
+
+The default 3D renderer keeps that promise — it is CSS transforms and downloads
+nothing. The **optional** three.js renderer is vendored into `static/vendor/`
+(committed, so still no internet needed at the venue) and is the one place the
+project has a third-party dependency. Delete that folder and
+`static/js/building-three.js` to drop it; the toggle disables itself and nothing
+else changes.
 
 Options: `python server.py --port 9000 --host 0.0.0.0`
 

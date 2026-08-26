@@ -55,6 +55,59 @@
   #banner.alarm{background:var(--alarm); color:#fff; animation:flash 1s steps(1,end) infinite}
   @keyframes flash{50%{background:#8c1d18}}
 
+  /* ---------- building view chrome ----------
+     The two renderers own everything inside #bStage; this is just the frame. */
+  #building{flex:1; display:none; flex-direction:column; min-height:0; position:relative}
+  body.view-building #building{display:flex}
+  body.view-building main,
+  body.view-building #taskbar{display:none}
+  body.view-building #backBtn,
+  body.view-building #resetLayout{display:none}
+  body:not(.view-building) #backBtn{display:inline-block}
+
+  #bBar{
+    display:flex; align-items:center; gap:10px; padding:6px 12px; flex:none;
+    background:var(--panel); border-bottom:1px solid var(--line); font-size:12px;
+    flex-wrap:wrap;
+  }
+  .bgrp{display:inline-flex; align-items:center; gap:5px; color:var(--muted)}
+  .bgrp button{padding:4px 10px; font-size:12px}
+  .bgrp button.on{background:var(--accent); border-color:var(--accent); color:#04121f; font-weight:600}
+  .bsep{width:1px; height:18px; background:var(--line)}
+  #bExplode{width:120px; accent-color:var(--accent); padding:0}
+  .bstat{color:var(--muted); font:11px/1 ui-monospace,SFMono-Regular,Consolas,monospace;
+    white-space:nowrap}
+
+  /* the stage is the 3D viewport: perspective for CSS 3D, canvas host for three */
+  #bStage{
+    flex:1; min-height:0; position:relative; overflow:hidden; cursor:grab;
+    background:
+      radial-gradient(ellipse 70% 55% at 50% 42%, #1b2532 0%, transparent 70%),
+      linear-gradient(#0c0f13, #05070a);
+  }
+  #bStage.dragging{cursor:grabbing}
+
+  #bTip{
+    position:absolute; z-index:50; pointer-events:none; display:none;
+    background:rgba(12,16,21,.96); border:1px solid var(--line); border-radius:8px;
+    padding:8px 10px; font-size:12px; min-width:150px; max-width:230px;
+    box-shadow:0 10px 30px rgba(0,0,0,.6);
+  }
+  #bTip .t{font-weight:700; margin-bottom:5px}
+  #bTip .r{display:flex; justify-content:space-between; gap:12px; color:var(--muted)}
+  #bTip .r b{font-weight:600}
+  #bTip .live{color:var(--accent); font-size:11px; margin-top:5px}
+
+  #bLegend{
+    flex:none; display:flex; align-items:center; gap:16px; padding:6px 14px;
+    background:var(--panel); border-top:1px solid var(--line);
+    font-size:11px; color:var(--muted); flex-wrap:wrap;
+  }
+  #bLegend span{display:inline-flex; align-items:center; gap:6px}
+  #bLegend i{width:9px; height:9px; border-radius:2px; display:inline-block}
+  #bLegend i.livedot{border-radius:50%; background:var(--accent); box-shadow:0 0 7px var(--accent)}
+  #bLegend .hint{margin-left:auto; opacity:.75}
+
   /* ---------- layout ---------- */
   main{flex:1; display:flex; min-height:0; position:relative}
   aside{
@@ -210,6 +263,7 @@
   <button id="sideToggle" title="Show / hide the sidebar">‹</button>
   <div class="brand">🏛 MuseumGuard <span id="subtitle"></span></div>
   <div class="lgroup">
+    <button id="backBtn" title="Back to the 3D building view">‹ Building</button>
     <button id="resetLayout" title="Restore the default panel layout">Reset layout</button>
   </div>
   <div class="spacer"></div>
@@ -242,6 +296,33 @@
   <div id="workspace"><div id="snapGhost"></div></div>
 </main>
 
+<!-- 3D building view. Two interchangeable renderers mount into #bStage; the
+     toggle in the bar swaps them live so they can be compared side by side. -->
+<section id="building">
+  <div id="bBar">
+    <span class="bgrp" id="bFloors"></span>
+    <span class="bsep"></span>
+    <label class="bgrp" title="Pull the floors apart to see inside">
+      Explode <input type="range" id="bExplode" min="0" max="100" value="26">
+    </label>
+    <span class="bsep"></span>
+    <span class="bgrp" id="bRenderer" title="Swap the 3D renderer — same data, same geometry">
+      <button data-r="css3d" class="on">CSS 3D</button><button data-r="three" disabled
+        title="Loading three.js…">three.js</button>
+    </span>
+    <span class="spacer"></span>
+    <span class="bstat" id="bStat"></span>
+  </div>
+  <div id="bStage"><div id="bTip"></div></div>
+  <div id="bLegend">
+    <span><i style="background:var(--ok)"></i>OK</span>
+    <span><i style="background:var(--warn)"></i>Warning</span>
+    <span><i style="background:var(--alarm)"></i>Alarm</span>
+    <span><i class="livedot"></i>Live hardware</span>
+    <span class="hint">drag to orbit · wheel to zoom · click a room</span>
+  </div>
+</section>
+
 <div id="taskbar"><span class="tb-lbl">Panels</span></div>
 
 <div id="modal">
@@ -264,11 +345,48 @@
 // State
 // ---------------------------------------------------------------------------
 let BOOT = null, TOKEN = null, COLORS = {}, SCALES = [];
-const charts = new Map();   // key -> Chart
-const wins   = new Map();   // key -> Win
+const charts = new Map();   // key -> Chart   (only the OPEN room's sensors)
+const wins   = new Map();   // key -> Win     (only the OPEN room's sensors)
 let zTop = 10;
 
+// Building-wide truth. `charts` only ever holds the room currently open, but
+// the 3D view and the alarm banner must see all 53 sensors, so every reading is
+// recorded here first regardless of which room is on screen.
+const STATES = new Map();   // sensor key -> {value, state}
+const DEFS   = new Map();   // sensor key -> bootstrap sensor def
+let ROOMS = [], ROOMS_BY_ID = new Map(), CURRENT_ROOM = null;
+
+const SEVERITY = {OK:0, WARN:1, STALE:2, ALARM:3, DISCONNECTED:4};
+
+/** Worst state across a room's sensors — this is what colours a room in 3D. */
+function roomState(roomId){
+  const room = ROOMS_BY_ID.get(roomId);
+  if (!room) return "DISCONNECTED";
+  let worst = "OK";
+  for (const key of room.keys){
+    const st = (STATES.get(key) || {}).state || "DISCONNECTED";
+    if ((SEVERITY[st] ?? 0) > (SEVERITY[worst] ?? 0)) worst = st;
+  }
+  return worst;
+}
+
+function roomOf(key){ return (DEFS.get(key) || {}).room || null; }
+
 const $ = s => document.querySelector(s);
+
+// The bridge the two 3D renderers see. Declared up here (before anything runs)
+// so a renderer script can register itself no matter when it finishes loading --
+// the three.js one is an ES module and lands after this classic script.
+window.MG = {
+  rooms: [], building: null,
+  roomState: id => roomState(id),
+  sensorsIn: id => ((ROOMS_BY_ID.get(id) || {}).keys || [])
+                     .map(k => ({...DEFS.get(k), ...STATES.get(k)})),
+  stateOf: key => (STATES.get(key) || {}).state || "DISCONNECTED",
+  color: state => COLORS[state] || "#6e7681",
+  openRoom: id => openRoom(id),
+  register: r => Renderers.register(r),
+};
 const fmtClock = ts => new Date(ts * 1000).toLocaleTimeString();
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 
@@ -441,7 +559,9 @@ class Chart {
 const wsRect = () => $("#workspace").getBoundingClientRect();
 const GAP = 8, MIN_W = 200, MIN_H = 120;
 const EDGE = 30;             // px from a workspace border that arms a snap
-const LS_KEY = "museumguard.layout.v1";
+// one saved arrangement per room -- a 6-sensor jewel vault and a 3-sensor
+// corridor want different tilings, and restoring one over the other looks broken
+const LS_KEY = () => `museumguard.layout.v2.${CURRENT_ROOM || "none"}`;
 let layoutCustomised = false;
 
 class Win {
@@ -654,8 +774,13 @@ function hideGhost(){ $("#snapGhost").style.display = "none"; }
 // -- layout presets -------------------------------------------------------
 const openWins = () => [...wins.values()].filter(w => !w.closed && !w.minimised);
 
+// The workspace is display:none while the building view is up, and 0-sized in a
+// minimised window. Laying out or saving against that produces a pile of
+// minimum-size windows in the corner -- and worse, persists it.
+function wsUsable(){ const w = wsRect(); return w.width > 80 && w.height > 80; }
+
 function tile(cols){
-  const list = openWins(); if (!list.length) return;
+  const list = openWins(); if (!list.length || !wsUsable()) return;
   const w = wsRect();
   // never ask for more columns than fit at MIN_W -- otherwise setRect clamps the
   // width up while the x positions still assume the narrower cell, and the last
@@ -692,18 +817,19 @@ let saveTimer = null;
 function saveLayout(){
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
+    if (!wsUsable()) return;             // never persist a collapsed layout
     const data = {custom: layoutCustomised,
                   side: document.body.classList.contains("side-collapsed"), w:{}};
     for (const [k, win] of wins){
       data.w[k] = {...win.rect(), z:win.z, min:win.minimised, closed:win.closed,
                    maxed:win.maxed, restore:win.restore};
     }
-    try{ localStorage.setItem(LS_KEY, JSON.stringify(data)); }catch(_){}
+    try{ localStorage.setItem(LS_KEY(), JSON.stringify(data)); }catch(_){}
   }, 250);
 }
 function loadLayout(){
   let data = null;
-  try{ data = JSON.parse(localStorage.getItem(LS_KEY) || "null"); }catch(_){}
+  try{ data = JSON.parse(localStorage.getItem(LS_KEY()) || "null"); }catch(_){}
   if (!data || !data.w) return false;
   if (data.side){
     // collapse without the slide animation, so wsRect() below measures the final width
@@ -742,24 +868,32 @@ function markDirty(key){ const c = charts.get(key); if (c) c.dirty = true; }
 // ---------------------------------------------------------------------------
 // Build the UI from the bootstrap payload
 // ---------------------------------------------------------------------------
-function build(){
-  $("#subtitle").textContent = "Environmental & Security Monitoring";
+function build(sensors){
+  const room = ROOMS_BY_ID.get(CURRENT_ROOM);
+  $("#subtitle").textContent = room
+    ? `${room.floorName} · ${room.name}${room.live ? " · LIVE RIG" : " · simulated"}`
+    : "Environmental & Security Monitoring";
   COLORS = BOOT.colors; SCALES = BOOT.timeScales;
 
   const ws = $("#workspace"), tiles = $("#tiles"), toggles = $("#toggles"),
         resets = $("#resets"), taskbar = $("#taskbar");
 
-  for (const d of BOOT.sensors){
+  // Inside a room the zone is usually redundant ("Crown Jewels · Case tilt").
+  // The live room is the exception: its one rig reports under two wire zones,
+  // so there the GALLERY/BASEMENT prefix is still telling you something.
+  const zp = d => (room && room.zones.length > 1) ? `${d.zone} · ` : "";
+
+  for (const d of sensors){
     // ---- status tile ----
     const tile = document.createElement("div");
     tile.className = "tile"; tile.id = "tile-" + d.key;
-    tile.innerHTML = `<span class="nm">${d.zone} · ${d.label}</span><span class="vl">--</span>`;
+    tile.innerHTML = `<span class="nm">${zp(d)}${d.label}</span><span class="vl">--</span>`;
     tiles.appendChild(tile);
 
     // ---- show/hide toggle ----
     const lab = document.createElement("label");
     lab.className = "tog";
-    lab.innerHTML = `<input type="checkbox" data-key="${d.key}" checked><span>${d.zone} · ${d.label}</span>`;
+    lab.innerHTML = `<input type="checkbox" data-key="${d.key}" checked><span>${zp(d)}${d.label}</span>`;
     lab.querySelector("input").addEventListener("change", e => {
       const w = wins.get(d.key);
       if (e.target.checked) w.reopen(); else w.close();
@@ -769,7 +903,7 @@ function build(){
     // ---- reset button for latching sensors ----
     if (d.latched){
       const b = document.createElement("button");
-      b.className = "ctl"; b.textContent = `Reset ${d.zone} · ${d.label}`;
+      b.className = "ctl"; b.textContent = `Reset ${zp(d)}${d.label}`;
       b.dataset.zone=d.zone; b.dataset.sensor=d.sensor; b.dataset.action="RESET";
       b.style.width="100%"; b.style.marginBottom="6px";
       resets.appendChild(b);
@@ -778,7 +912,7 @@ function build(){
     // ---- taskbar button ----
     const tb = document.createElement("button");
     tb.className = "tb"; tb.dataset.key = d.key;
-    tb.innerHTML = `<span class="tdot"></span><span>${d.zone} · ${d.label}</span>`;
+    tb.innerHTML = `<span class="tdot"></span><span>${zp(d)}${d.label}</span>`;
     taskbar.appendChild(tb);
 
     // ---- window ----
@@ -786,7 +920,7 @@ function build(){
     el.className = "win"; el.id = "win-" + d.key;
     el.innerHTML = `
       <div class="win-head">
-        <span class="title" title="${d.zone} · ${d.label}"><span class="zn">${d.zone} · </span>${d.label}</span>
+        <span class="title" title="${d.zone} · ${d.label}"><span class="zn">${zp(d)}</span>${d.label}</span>
         <span class="reading">--</span>
         <select class="scale" title="Time window">${SCALES.map((s,i)=>
           `<option value="${i}"${i===BOOT.defaultScaleIndex?" selected":""}>${s[0]}</option>`).join("")}</select>
@@ -829,15 +963,72 @@ function build(){
     el.querySelector(".liveBtn").addEventListener("click", () => ch.goLive());
   }
 
-  document.querySelectorAll(".ctl").forEach(b =>
-    b.addEventListener("click", () => sendCommand(b.dataset.zone, b.dataset.sensor, b.dataset.action)));
+  // NB: the ARM/DISARM buttons are static sidebar markup that teardown() does
+  // not remove, so binding them here would stack one listener per room opened
+  // and a single click would fire N commands. They are delegated once, below.
 
   // restore the user's last arrangement, else the default 2-column tiling
   if (!loadLayout()) defaultLayout();
 
-  (BOOT.events||[]).forEach(e => addLog(e.msg, e.ts));
   setConnected(BOOT.connected);
-  setAuth(false);
+  setAuth(!!TOKEN, AUTH_USER);
+}
+
+// ---------------------------------------------------------------------------
+// Room navigation
+// ---------------------------------------------------------------------------
+/** Drop every per-sensor widget so build() can repopulate for another room. */
+function teardown(){
+  for (const w of wins.values()) w.el.remove();
+  charts.clear(); wins.clear();
+  for (const sel of ["#tiles", "#toggles", "#resets"]) $(sel).textContent = "";
+  // the taskbar keeps its "Panels" label and loses only the per-sensor buttons
+  $("#taskbar").querySelectorAll(".tb").forEach(b => b.remove());
+  layoutCustomised = false;
+}
+
+function openRoom(roomId){
+  const room = ROOMS_BY_ID.get(roomId);
+  if (!room) return showBuilding();
+  teardown();
+  CURRENT_ROOM = roomId;
+  // Reveal the workspace BEFORE building: the default tiling measures
+  // #workspace, and while the building view is up it is display:none and
+  // measures 0x0 -- every window would be laid out into nothing.
+  document.body.classList.remove("view-building");
+  Renderers.stop();
+  build(BOOT.sensors.filter(d => d.room === roomId));
+  // replay the current state so the room shows live values immediately rather
+  // than "--" until each sensor's next sample arrives
+  for (const d of BOOT.sensors){
+    if (d.room !== roomId) continue;
+    const st = STATES.get(d.key);
+    if (st && st.value != null) setSensor(d.key, st.value, st.state);
+  }
+  setHash(`#/room/${roomId}`);
+}
+
+function showBuilding(){
+  CURRENT_ROOM = null;
+  document.body.classList.add("view-building");
+  $("#subtitle").textContent = "Building overview";
+  Renderers.start();
+  setHash("#/building");
+}
+
+let _muteHash = false;
+function setHash(h){
+  if (location.hash === h) return;
+  _muteHash = true;                       // our own write must not re-trigger routing
+  location.hash = h;
+  setTimeout(() => { _muteHash = false; }, 0);
+}
+
+function route(){
+  if (_muteHash) return;
+  const m = /^#\/room\/([A-Za-z0-9_]+)$/.exec(location.hash || "");
+  if (m && ROOMS_BY_ID.has(m[1])) openRoom(m[1]);
+  else showBuilding();
 }
 
 // ---------------------------------------------------------------------------
@@ -861,19 +1052,30 @@ function setSensor(key, value, state){
 
 let _bannerKey = null;
 function refreshBanner(){
-  const alarming = [...charts.entries()].filter(([,c]) => c.state === "ALARM")
-                     .map(([k]) => k.split(".")[0]);
-  const key = [...new Set(alarming)].sort().join(",");
+  // Building-wide, from STATES rather than `charts`: an alarm two floors up
+  // must still reach the banner while you are looking at one room.
+  const rooms = new Set();
+  for (const [key, s] of STATES){
+    if (s.state === "ALARM"){ const r = roomOf(key); if (r) rooms.add(r); }
+  }
+  const key = [...rooms].sort().join(",");
   if (key === _bannerKey) return;      // only touch the DOM when it changes
   _bannerKey = key;
   const b = $("#banner");
-  if (key){ b.className = "alarm"; b.textContent = "⚠  ACTIVE ALARM: " + key; }
+  if (key){
+    const names = [...rooms].sort()
+      .map(r => (ROOMS_BY_ID.get(r) || {}).name || r).join(", ");
+    b.className = "alarm";
+    b.textContent = `⚠  ACTIVE ALARM: ${names}`;
+  }
   else { b.className=""; b.textContent = "All clear"; }
 }
 
 function setConnected(on){
   $("#connDot").className = "dot" + (on ? " on" : "");
   $("#connText").textContent = on ? "CONNECTED" : "DISCONNECTED";
+  // grey out the whole building, not just the open room's charts
+  if (!on) for (const [key, s] of STATES) STATES.set(key, {...s, state:"DISCONNECTED"});
   if (!on) for (const [key, ch] of charts){
     ch.state = "DISCONNECTED"; ch.dirty = true;
     const el = document.getElementById("win-"+key);
@@ -894,8 +1096,10 @@ async function resync(){
 
   const restarted = boot.bootId !== BOOT.bootId;
   BOOT = boot; COLORS = boot.colors; SCALES = boot.timeScales;
+  ingestBuilding(boot);
 
   for (const d of boot.sensors){
+    STATES.set(d.key, {value: d.value, state: d.state});
     const ch = charts.get(d.key);
     if (!ch) continue;
     // the server's ring buffer is the truth; replacing (not appending) also
@@ -930,8 +1134,11 @@ function addLog(msg, ts){
 // ---------------------------------------------------------------------------
 // Auth + commands
 // ---------------------------------------------------------------------------
+let AUTH_USER = null;
 function setAuth(on, user){
   TOKEN = on ? TOKEN : null;
+  AUTH_USER = on ? (user || AUTH_USER) : null;
+  user = AUTH_USER;
   const s = $("#authState");
   s.className = on ? "on" : "";
   s.textContent = on ? `Logged in as ${user} — overrides enabled`
@@ -977,6 +1184,14 @@ $("#loginForm").addEventListener("submit", async e => {
 // ---------------------------------------------------------------------------
 $("#resetLayout").addEventListener("click", () => defaultLayout());
 
+// One delegated handler for every override control -- the static ARM/DISARM
+// pair and the per-sensor Reset buttons that build() recreates for each room.
+document.querySelector("aside").addEventListener("click", e => {
+  const b = e.target.closest(".ctl");
+  if (!b || b.disabled) return;
+  sendCommand(b.dataset.zone, b.dataset.sensor, b.dataset.action);
+});
+
 $("#sideToggle").addEventListener("click", () => {
   const c = document.body.classList.toggle("side-collapsed");
   $("#sideToggle").textContent = c ? "›" : "‹";
@@ -984,6 +1199,7 @@ $("#sideToggle").addEventListener("click", () => {
 });
 
 function clampAll(){
+  if (!wsUsable()) return;
   const w = wsRect();
   for (const win of wins.values()){
     if (win.maxed){ win.setRect({x:GAP, y:GAP, w:w.width-2*GAP, h:w.height-2*GAP}); continue; }
@@ -997,21 +1213,183 @@ function clampAll(){
 let rzTimer = null;
 window.addEventListener("resize", () => {
   clearTimeout(rzTimer);
-  rzTimer = setTimeout(() => { layoutCustomised ? clampAll() : tile(2); }, 120);
+  rzTimer = setTimeout(() => {
+    // While the building view is up the workspace is display:none, so it
+    // measures 0x0 -- re-tiling against that would save a ruined layout.
+    if (!CURRENT_ROOM) return;
+    layoutCustomised ? clampAll() : tile(2);
+  }, 120);
 });
 
 // ---------------------------------------------------------------------------
 // Boot: load state, then stream
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// 3D renderers
+//
+// Two interchangeable implementations of the same view register themselves here
+// (building-css3d.js and building-three.js). Each is an object:
+//
+//     { name, label, mount(stageEl), unmount(), update(), setExplode(t),
+//       setFloor(id|null), available }
+//
+// `update()` is called on every animation frame while the building is on
+// screen; everything else is driven from the bar. Keeping the surface this
+// small is what makes the A/B toggle honest -- both get identical geometry,
+// identical colours and identical data.
+// ---------------------------------------------------------------------------
+const Renderers = {
+  reg: new Map(),
+  active: null,
+  running: false,
+  _raf: 0,
+  _frames: 0, _fpsAt: 0, _fps: 0,
+
+  register(r){
+    this.reg.set(r.name, r);
+    const btn = document.querySelector(`#bRenderer button[data-r="${r.name}"]`);
+    if (btn){
+      btn.disabled = !r.available;
+      btn.title = r.available ? `Render with ${r.label}` : `${r.label} unavailable`;
+    }
+    // if this is the renderer we're meant to be showing, bring it up now
+    if (this.running && this.wanted() === r.name && this.active !== r) this.select(r.name);
+  },
+
+  wanted(){
+    let saved = null;
+    try{ saved = localStorage.getItem("museumguard.renderer"); }catch(_){}
+    const r = this.reg.get(saved);
+    return (r && r.available) ? saved : "css3d";
+  },
+
+  select(name){
+    const r = this.reg.get(name);
+    if (!r || !r.available || r === this.active) return;
+    if (this.active) this.active.unmount();
+    this.active = r;
+    try{ localStorage.setItem("museumguard.renderer", name); }catch(_){}
+    document.querySelectorAll("#bRenderer button")
+      .forEach(b => b.classList.toggle("on", b.dataset.r === name));
+    r.mount($("#bStage"));
+    r.setExplode(+$("#bExplode").value / 100);
+    r.setFloor(FLOOR_FILTER);
+    this.stat();          // don't leave the old renderer's readout on screen
+  },
+
+  start(){
+    if (this.running) return;
+    this.running = true;
+    if (!this.active) this.select(this.wanted());
+    else this.active.mount($("#bStage"));
+    // measure fps from now, not from page load -- otherwise the first sample
+    // divides a handful of frames by the whole lifetime of the tab and reads 0
+    this._fpsAt = performance.now(); this._frames = 0;
+    const loop = now => {
+      if (!this.running) return;
+      if (this.active) this.active.update();
+      this._frames++;
+      if (now - this._fpsAt > 500){
+        this._fps = Math.round(this._frames * 1000 / (now - this._fpsAt));
+        this._frames = 0; this._fpsAt = now;
+        this.stat();
+      }
+      this._raf = requestAnimationFrame(loop);
+    };
+    this._raf = requestAnimationFrame(loop);
+  },
+
+  stop(){
+    this.running = false;
+    cancelAnimationFrame(this._raf);
+    if (this.active) this.active.unmount();
+  },
+
+  /** The A/B readout: fps and what this renderer cost to load. */
+  stat(){
+    const r = this.active;
+    if (!r) return;
+    const kb = r.bytes ? `${(r.bytes/1024).toFixed(0)} KB` : "0 KB — no dependencies";
+    $("#bStat").textContent = `${r.label} · ${this._fps} fps · ${kb}`;
+  },
+};
+
+let FLOOR_FILTER = null;   // null = show all floors
+
+function buildBar(){
+  // floor tabs, top floor first so they read like a building
+  const tabs = $("#bFloors");
+  const floors = [...BOOT.building.floors].sort((a,b) => b.level - a.level);
+  const mk = (id, text, title) => {
+    const b = document.createElement("button");
+    b.textContent = text; b.title = title; b.dataset.f = id ?? "";
+    b.addEventListener("click", () => {
+      FLOOR_FILTER = (FLOOR_FILTER === id) ? null : id;
+      tabs.querySelectorAll("button").forEach(x =>
+        x.classList.toggle("on", (x.dataset.f || null) === FLOOR_FILTER));
+      if (Renderers.active) Renderers.active.setFloor(FLOOR_FILTER);
+    });
+    tabs.appendChild(b);
+  };
+  mk(null, "All floors", "Show every floor");
+  for (const f of floors) mk(f.id, f.name, `Isolate ${f.name}`);
+  tabs.querySelector("button").classList.add("on");
+
+  $("#bExplode").addEventListener("input", e => {
+    if (Renderers.active) Renderers.active.setExplode(+e.target.value / 100);
+  });
+  document.querySelectorAll("#bRenderer button").forEach(b =>
+    b.addEventListener("click", () => Renderers.select(b.dataset.r)));
+  $("#backBtn").addEventListener("click", showBuilding);
+
+  // If the three.js module never registers (vendor files missing, WebGL
+  // blocked, an ES-module error) say so on the button instead of leaving a
+  // dead control. The CSS 3D variant carries the demo either way.
+  setTimeout(() => {
+    if (Renderers.reg.has("three")) return;
+    const btn = document.querySelector('#bRenderer button[data-r="three"]');
+    if (btn) btn.title = "three.js unavailable — /static/vendor/ missing or WebGL blocked";
+  }, 4000);
+}
+
+/** Index the building payload: rooms, their sensor keys, and floor names. */
+function ingestBuilding(boot){
+  const b = boot.building;
+  DEFS.clear();
+  for (const d of boot.sensors) DEFS.set(d.key, d);
+
+  const floorName = Object.fromEntries(b.floors.map(f => [f.id, f.name]));
+  ROOMS = b.rooms.map(r => ({
+    ...r,
+    floorName: floorName[r.floor] || r.floor,
+    level: (b.floors.find(f => f.id === r.floor) || {}).level || 0,
+    keys: boot.sensors.filter(d => d.room === r.id).map(d => d.key),
+  }));
+  ROOMS_BY_ID = new Map(ROOMS.map(r => [r.id, r]));
+  window.MG.building = b;
+  window.MG.rooms = ROOMS;
+}
+
 (async function(){
   BOOT = await (await fetch("/api/bootstrap")).json();
   document.title = "MuseumGuard";
-  build();
+  COLORS = BOOT.colors; SCALES = BOOT.timeScales;
+  for (const d of BOOT.sensors) STATES.set(d.key, {value: d.value, state: d.state});
+  ingestBuilding(BOOT);
+  (BOOT.events||[]).forEach(e => addLog(e.msg, e.ts));
+
+  buildBar();
+  setConnected(BOOT.connected);   // build() also does this, but only once a room is open
+  window.addEventListener("hashchange", route);
+  route();                                  // deep link, else the building view
 
   const es = new EventSource("/api/stream");
   es.onmessage = ev => {
     const m = JSON.parse(ev.data);
     if (m.type === "reading"){
+      // record for the whole building FIRST -- the 3D view and the banner read
+      // this, and they care about rooms that aren't open
+      STATES.set(m.key, {value: m.value, state: m.state});
       const ch = charts.get(m.key);
       if (ch){ ch.push(m.ts, m.value); setSensor(m.key, m.value, m.state); }
     } else if (m.type === "connection"){ setConnected(m.connected); }
@@ -1036,5 +1414,17 @@ window.addEventListener("resize", () => {
   requestAnimationFrame(frame);
 })();
 </script>
+
+<!-- Variant A: no dependencies at all. Always available. -->
+<script src="/static/js/building-css3d.js"></script>
+
+<!-- Variant B: three.js, vendored locally so the venue needs no internet.
+     The import map resolves the bare "three" specifier the example modules use.
+     Loaded as a module, so a missing/blocked vendor file degrades to "the
+     three.js button stays disabled" rather than breaking the page. -->
+<script type="importmap">
+{"imports":{"three":"/static/vendor/three.module.js"}}
+</script>
+<script type="module" src="/static/js/building-three.js"></script>
 </body>
 </html>
