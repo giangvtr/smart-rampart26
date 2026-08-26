@@ -18,6 +18,7 @@ import random
 import threading
 import time
 
+import building
 import config
 from core import Codec, Command, JsonCodec, LineCodec, Reading, Source
 
@@ -55,8 +56,8 @@ class SimulatedSource(Source):
     ALARM until a RESET command clears them.
     """
 
-    # resting value each stream wanders around; anything not listed starts
-    # mid-range (see __init__)
+    # Resting value for the four real-rig streams. Simulated room sensors are
+    # not listed: _default_base() derives theirs from the sensor type.
     BASE_SEEDS = {
         "BASEMENT.WATER": 40.0,
         "BASEMENT.TEMP": 19.0,
@@ -64,8 +65,17 @@ class SimulatedSource(Source):
         "BASEMENT.FIRE": 8.0,      # 0..100 index; alarms above 70
     }
 
-    def __init__(self, codec: Codec | None = None, parent=None):
+    def __init__(self, codec: Codec | None = None, parent=None,
+                 synthetic_only: bool = False, owns_link: bool = True):
+        """`synthetic_only` restricts this source to the simulated museum rooms,
+        so it can run *alongside* a real transport (the ESP32 HTTP ingest) that
+        owns the four real sensors -- that is how --demo-rooms works when the
+        rig is live. `owns_link` should then be False: the real transport is the
+        one whose connection state means anything, and a second source shouting
+        CONNECTED would paper over a dead node."""
         super().__init__(codec, parent)
+        self.synthetic_only = synthetic_only
+        self.owns_link = owns_link
         self._thread: threading.Thread | None = None
         self._running = False
         # System armed state. With the Gallery motion sensor gone nothing here
@@ -73,21 +83,56 @@ class SimulatedSource(Source):
         # local alarm on DISARM) and shown in the event log.
         self._armed = True
         self._latched: dict[str, bool] = {}   # sensor.key -> latched-in-alarm
-        # Smooth baselines per sensor for a natural wander. Built from
-        # config.SENSORS rather than hard-coded, so adding a sensor there does
-        # not need an edit here (it starts mid-range); BASE_SEEDS just gives the
-        # known ones a more plausible resting point than the midpoint.
-        self._base = {s.key: self.BASE_SEEDS.get(s.key, (s.vmin + s.vmax) / 2.0)
-                      for s in config.SENSORS}
+        # Simulated rooms auto-clear their latches (see _latch). The real rig
+        # does NOT: there, a latched alarm holds until an operator RESETs it,
+        # which is the behaviour the firmware and the demo script rely on.
+        self._latch_until: dict[str, float] = {}
+        # Smooth baselines per sensor for a natural wander. Derived from the
+        # sensor definition so a new sensor needs no edit here; BASE_SEEDS then
+        # gives the four real ones a more plausible resting point.
+        self._base = {s.key: self._default_base(s) for s in self._sensors()}
+        self._base.update({k: v for k, v in self.BASE_SEEDS.items()
+                           if k in self._base})
+        # the value each sensor drifts back toward once an excursion ends --
+        # without it a random walk that reaches 900 adc simply stays there
+        self._rest = dict(self._base)
         self._next_sample: dict[str, float] = {}
+        # scripted incident state (see building.INCIDENTS)
+        self._incident: tuple[str, dict] | None = None
+        self._incident_until = 0.0
+        self._next_incident = time.time() + random.uniform(*building.INCIDENT_GAP_S)
+
+    def _sensors(self):
+        """The sensors this instance is responsible for."""
+        if self.synthetic_only:
+            return [s for s in config.SENSORS if s.synthetic]
+        return list(config.SENSORS)
+
+    @staticmethod
+    def _default_base(sdef) -> float:
+        """A resting value that classifies as OK.
+
+        Two-sided sensors (temperature, humidity) sit mid-band; one-sided ones
+        (water, smoke, sound...) rest low, well under their warn ceiling.
+        """
+        if sdef.warn and sdef.warn[0] is not None and sdef.warn[1] is not None:
+            return (sdef.warn[0] + sdef.warn[1]) / 2.0
+        if sdef.kind == "event":
+            return 0.0
+        return sdef.vmin + 0.15 * (sdef.vmax - sdef.vmin)
 
     # -- Source interface --------------------------------------------------
     def start(self) -> None:
         if self._running:
             return
         self._running = True
-        self.connection_changed.emit(True)
-        self.notice.emit("Simulated source started (no hardware).")
+        if self.owns_link:
+            self.connection_changed.emit(True)
+        if self.synthetic_only:
+            self.notice.emit(f"Demo rooms simulating ({len(self._sensors())} "
+                             f"sensors across the museum).")
+        else:
+            self.notice.emit("Simulated source started (no hardware).")
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._thread.start()
 
@@ -95,7 +140,8 @@ class SimulatedSource(Source):
         self._running = False
         if self._thread:
             self._thread.join(timeout=1.0)
-        self.connection_changed.emit(False)
+        if self.owns_link:
+            self.connection_changed.emit(False)
 
     def send_command(self, cmd: Command) -> None:
         # exactly the path the real node would react to -- but in-process.
@@ -108,13 +154,15 @@ class SimulatedSource(Source):
         elif cmd.action == "RESET":
             key = f"{cmd.zone}.{cmd.sensor}"
             self._latched[key] = False
+            self._latch_until.pop(key, None)
             self.notice.emit(f"Latched alarm cleared: {key}.")
 
     # -- internals ---------------------------------------------------------
     def _loop(self) -> None:
         while self._running:
             now = time.time()
-            for sdef in config.SENSORS:
+            self._tick_incident(now)
+            for sdef in self._sensors():
                 due = self._next_sample.get(sdef.key, 0.0)
                 if now < due:
                     continue
@@ -123,15 +171,92 @@ class SimulatedSource(Source):
                 self.reading_received.emit(Reading(sdef.zone, sdef.sensor, value, state))
             time.sleep(0.05)
 
+    # -- scripted incidents ------------------------------------------------
+    def _tick_incident(self, now: float) -> None:
+        """Start/stop the periodic correlated incident in a simulated room.
+
+        Left to independent random walks the building is a wall of green with
+        the odd unrelated blip. Real alarms corroborate -- a disturbed case
+        tilts AND vibrates AND makes noise at the same moment -- so the demo
+        drives several sensors in one room together.
+        """
+        # Nothing to script when the simulated rooms are switched off: with only
+        # the real rig running, an "incident in the Crown Jewels" in the event
+        # log would be pure fiction next to real measurements.
+        if not config.DEMO_ROOMS:
+            return
+
+        if self._incident is not None:
+            if now >= self._incident_until:
+                room, _ = self._incident
+                self._incident = None
+                self._next_incident = now + random.uniform(*building.INCIDENT_GAP_S)
+                self.notice.emit(f"[{room}] incident cleared (simulated).")
+            return
+
+        if now < self._next_incident:
+            return
+
+        room = random.choice(list(building.INCIDENTS))
+        label, targets = building.INCIDENTS[room]
+        self._incident = (room, targets)
+        self._incident_until = now + building.INCIDENT_HOLD_S
+        self.notice.emit(f"[{room}] {label} — simulated incident.")
+
+    def _incident_target(self, sdef) -> float | None:
+        """The value this sensor is being driven toward, if it is caught up in
+        the running incident."""
+        if self._incident is None:
+            return None
+        room, targets = self._incident
+        if sdef.room != room:
+            return None
+        return targets.get(sdef.sensor)
+
+    # -- latching ----------------------------------------------------------
+    def _latch(self, sdef, now: float) -> None:
+        """Put a latching sensor into ALARM.
+
+        A simulated sensor also books its own release, so 48 demo sensors don't
+        each latch once and leave the whole building stuck red; the real rig
+        holds until RESET, exactly like the firmware.
+        """
+        self._latched[sdef.key] = True
+        if sdef.synthetic and sdef.key not in self._latch_until:
+            self._latch_until[sdef.key] = now + random.uniform(8.0, 18.0)
+
+    def _is_latched(self, sdef, now: float) -> bool:
+        if not self._latched.get(sdef.key, False):
+            return False
+        release = self._latch_until.get(sdef.key)
+        if release is not None and now >= release:
+            self._latched[sdef.key] = False
+            del self._latch_until[sdef.key]
+            return False
+        return True
+
+    # -- sampling ----------------------------------------------------------
     def _sample(self, sdef, now: float):
         key = sdef.key
-        base = self._base[key]
+        target = self._incident_target(sdef)
 
-        # environmental / water: wander around baseline, occasional excursion
-        base += random.uniform(-0.4, 0.4)
-        # rare push toward a danger zone so the demo shows colour changes
-        if random.random() < 0.01:
-            base += random.choice([-1, 1]) * (sdef.vmax - sdef.vmin) * 0.15
+        if sdef.kind == "event":
+            return self._sample_event(sdef, target, now)
+
+        base = self._base[key]
+        if target is not None:
+            # ramp toward the incident value rather than snapping, so the chart
+            # shows a climb the way a real excursion would
+            base += (target - base) * 0.35
+        else:
+            # pull back toward rest, then wander. Simulated rooms recover briskly
+            # (~30 s) so the building doesn't accumulate stuck-red rooms over a
+            # long demo; the real rig drifts back slowly, as a real room would.
+            base += (self._rest[key] - base) * (0.10 if sdef.synthetic else 0.02)
+            base += random.uniform(-0.4, 0.4)
+            # rare push toward a danger zone so the demo shows colour changes
+            if random.random() < 0.01:
+                base += random.choice([-1, 1]) * (sdef.vmax - sdef.vmin) * 0.15
         base = max(sdef.vmin, min(sdef.vmax, base))
         self._base[key] = base
         value = round(base, 1)
@@ -139,10 +264,38 @@ class SimulatedSource(Source):
         state = classify(sdef, value)
         if sdef.latched:
             if state == config.STATE_ALARM:
-                self._latched[key] = True
-            if self._latched.get(key, False):
+                self._latch(sdef, now)
+            if self._is_latched(sdef, now):
                 state = config.STATE_ALARM  # stay latched until RESET
         return value, state
+
+    def _sample_event(self, sdef, target, now: float):
+        """Discrete sensors: motion, door contacts, case tilt, keypad failures.
+
+        They sit at rest and blip, and (like the firmware) only count while the
+        system is ARMED -- DISARM is the "someone's cleaning" switch.
+
+        Simulated ones blip rarely: the interesting trips come from the scripted
+        incidents, and 13 event sensors firing independently would just be noise.
+        """
+        blip_p = 0.002 if sdef.synthetic else 0.03
+        if self._armed and (target is not None or random.random() < blip_p):
+            self._latch(sdef, now)
+
+        latched = self._is_latched(sdef, now) and self._armed
+        if not latched:
+            return 0.0, config.STATE_OK
+
+        # a latched event sensor reports its "tripped" magnitude: booleans read
+        # 1, graded ones (tilt angle, failed-PIN count) read their alarm level
+        if target is not None:
+            value = round(target, 1)
+        elif sdef.vmax <= 1:
+            value = 1.0
+        else:
+            hi = (sdef.alarm or (None, sdef.vmax))[1] or sdef.vmax
+            value = round(min(sdef.vmax, hi + 1), 1)
+        return value, config.STATE_ALARM
 
 
 # --------------------------------------------------------------------------

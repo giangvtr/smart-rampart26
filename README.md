@@ -48,6 +48,12 @@ event log. Log in again as `guard` via **Agent login** in the top bar, hit
 > `--source` picks where data comes from: `http` (default, real ESP32 over
 > WiFi), `sim` (fake data), or `serial` (USB/Bluetooth Arduino). Nothing in the
 > code needs changing between them.
+>
+> There is also a **3D building view** in the top bar (Building / Graphs /
+> Simple). By default only the basement room has sensors in it; add
+> `--demo-rooms` to populate the other 11 with simulated activity for a
+> showpiece run. Off by default so every reading on screen is a real one.
+> See [`dashboard/BUILDING.md`](dashboard/BUILDING.md).
 
 **Demo login** — two tiers (see [`dashboard/README.md`](dashboard/README.md)):
 

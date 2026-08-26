@@ -10,6 +10,12 @@ local logging.
 Talks to the real **ESP32 zone nodes over WiFi** out of the box; `--source sim`
 falls back to a built-in simulator with no hardware at all.
 
+A third view is a **see-through 3D museum** — 3 floors, 12 rooms, nine of them
+galleries hung with paintings and filled with statues, vitrines and armour —
+where you click a room to get its dashboard. Drawn with CSS 3D transforms, so
+it downloads nothing. One room is the real rig; the other 11 are **empty unless
+you pass `--demo-rooms`**. See **[BUILDING.md](BUILDING.md)**.
+
 ## Status
 
 Working end to end, on simulated data:
@@ -22,6 +28,9 @@ Working end to end, on simulated data:
 - ✅ Two-tier PBKDF2 login: a `viewer` password gates the dashboard itself, a
   separate `guard` password gates the override/disarm controls.
 - ✅ Login attempts are rate-limited per IP (5 fails → 5 min lockout).
+- ✅ 3D building view (CSS transforms, no dependencies) with per-room
+  drill-down and hash deep links; `--demo-rooms` populates the 11 simulated
+  rooms, and it is off by default.
 - ✅ `HttpIngestSource` (**WiFi / ESP32**) — the default source. ESP32 zone
   nodes POST readings to `/api/ingest`; the pending override rides back on the
   same reply (no inbound connection to the node, so it works behind NAT and in
@@ -64,11 +73,20 @@ Uses only the Python standard library: no Flask/FastAPI, no npm, no CDN. The
 charts are drawn on plain `<canvas>` with **no charting library**, so it works
 with no internet at the venue. Live data arrives over Server-Sent Events.
 
-Options: `python server.py --port 9000 --host 0.0.0.0 --source sim`
+The 3D building view keeps that promise too: it is CSS transforms and a single
+864-line script, so it downloads nothing either. It is driven by one finger
+and a pinch on a phone as well as by a mouse.
+
+Options: `python server.py --port 9000 --host 0.0.0.0 --source sim --demo-rooms`
 
 `--source` picks where readings come from — `http` (default: real ESP32 over
 WiFi), `sim` (fake data, no hardware), or `serial` (USB/Bluetooth Arduino, port
 in `config.py`). Nothing in the code needs editing to switch.
+
+`--demo-rooms` populates the 11 **simulated** museum rooms behind the 3D view.
+It is **off by default**: without it the dashboard has exactly the four real
+basement sensors and every reading on screen is a real measurement. See
+*The 3D building view* below.
 
 You'll land on a sign-in page first — that's the `viewer` gate (see *Demo
 login* below). Signing in sets a cookie; the dashboard itself opens after.
@@ -118,11 +136,25 @@ locks that IP out for 5 minutes (`security.RateLimiter`).
 crosshair with the exact value and timestamp. Each window's title bar carries a
 time-scale selector (30 s / 2 min / 5 min / 30 min / All).
 
-**Two views (web):** the **Graphs / Simple** switch in the top bar flips between
-the floating-window workspace and a **Simple** board — one box per sensor showing
-just its current value, filled with that sensor's state colour (green OK, amber
-warning, red alarm, grey disconnected; alarming boxes pulse). Handy for a wall
-display or a quick glance, and it's what phones get. The choice is remembered.
+**Three views (web):** the **Building / Graphs / Simple** switch in the top bar.
+
+- **Graphs** — the floating-window workspace, a 2x2 for the four-sensor live
+  rig. This is the landing view.
+- **Simple** — one box per sensor showing just its current value, filled with
+  that sensor's state colour (green OK, amber warning, red alarm, grey
+  disconnected; alarming boxes pulse). Handy for a wall display or a quick
+  glance, and it's what phones land on.
+- **Building** — the 3D museum. Click a room to open its dashboard in whichever
+  of Graphs/Simple you last used.
+
+Graphs and Simple always show **one room** — the live rig unless you picked
+another in the building view; the subtitle names it, and the URL carries it
+(`#/room/B1_ARCHIVE`) so a room is linkable. The choice of view is remembered.
+
+The alarm banner follows where you are: building-wide in the building view,
+scoped to the open room once you are inside one. The full-screen **fire alert**
+is the exception — it is building-wide always, so it reaches you even while you
+are looking at a room three floors up.
 
 **On a phone** (≤ 760 px), the sidebar becomes a ☰ drawer that slides over the
 content instead of eating half the screen (tap the dimmed area to close it), the
@@ -255,6 +287,10 @@ decision that never touches the UI:
 - **`server.py` + `static/index.html`** — the web UI (stdlib HTTP + SSE; canvas
   charts and the window manager both live in `index.html`, no build step).
   `static/login.html` is the sign-in page.
+- **`building.py` + `static/js/building-css3d.js`** — the 3D building view: all
+  geometry (floors, rooms, furniture, the shell) is data in `building.py`; the
+  renderer only decides how many pixels a metre is worth. See
+  [BUILDING.md](BUILDING.md).
 - **`panels.py` + `app.py`** — the desktop UI (pyqtgraph widgets, main window).
 
 ## Local data logging (no Postgres)
