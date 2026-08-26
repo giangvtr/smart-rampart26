@@ -78,8 +78,6 @@
   .bgrp button{padding:4px 10px; font-size:12px}
   .bgrp button.on{background:var(--accent); border-color:var(--accent); color:#04121f; font-weight:600}
   .bsep{width:1px; height:18px; background:var(--line)}
-  .bstat{color:var(--muted); font:11px/1 ui-monospace,SFMono-Regular,Consolas,monospace;
-    white-space:nowrap}
 
   /* the stage is the 3D viewport: a perspective root for the CSS 3D scene */
   #bStage{
@@ -333,7 +331,6 @@
   @media (max-width:760px){
     header{padding:6px 9px; gap:8px}
     .brand{font-size:14px}
-    .brand #subtitle{display:none}
     /* the sidebar slides over the content instead of stealing half the width */
     aside{
       position:absolute; top:0; bottom:0; left:0; z-index:600; width:min(300px,86vw);
@@ -474,7 +471,7 @@
 
 <header>
   <button id="sideToggle" title="Show / hide the sidebar">‹</button>
-  <div class="brand">🏛<span class="bn"> MuseumGuard</span> <span id="subtitle"></span></div>
+  <div class="brand">🏛<span class="bn"> MuseumGuard</span></div>
   <div class="lgroup">
     <div class="seg" id="viewSeg" title="Switch between the 3D building, live graphs and plain value boxes">
       <button id="viewBuilding">🏛<span class="lbl"> Building</span></button>
@@ -522,9 +519,6 @@
       <label class="tog" style="margin-bottom:4px">
         <input type="checkbox" id="anomShow" checked><span>Shade on charts</span>
       </label>
-      <label class="tog" style="margin-bottom:8px">
-        <input type="checkbox" id="anomBand" checked><span>Show expected range</span>
-      </label>
       <div id="anoms"></div>
     </section>
 
@@ -545,7 +539,6 @@
   <div id="bBar">
     <span class="bgrp" id="bFloors"></span>
     <span class="spacer"></span>
-    <span class="bstat" id="bStat"></span>
   </div>
   <div id="bStage"><div id="bTip"></div></div>
   <div id="bLegend">
@@ -662,7 +655,11 @@ const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 // ---------------------------------------------------------------------------
 const ANOMS = new Map();          // id -> record, oldest first (Maps keep order)
 const ANOM_CAP = 200;             // matches the server's retention
-let SHOW_ANOMS = true, SHOW_BAND = true, ANOM_MIN_SEV = "LOW";
+// The learned expected-range band is permanently off -- it was more noise than
+// signal over the alarm thresholds already shaded on every chart. The drawing
+// code is left in place behind this constant rather than ripped out.
+const SHOW_BAND = false;
+let SHOW_ANOMS = true, ANOM_MIN_SEV = "LOW";
 
 const SEV_RANK  = {LOW:0, MEDIUM:1, HIGH:2};
 const SEV_STYLE = {
@@ -671,6 +668,9 @@ const SEV_STYLE = {
   HIGH:   {fill:"rgba(248,81,73,.17)",  line:"#f85149"},
 };
 const sevOK = a => SEV_RANK[a.severity] >= SEV_RANK[ANOM_MIN_SEV];
+// Every anomaly belongs to a sensor, so to a room: inside one, the pane lists
+// only its own. roomOf() is hoisted below; this only runs from handlers.
+const anomInScope = a => !CURRENT_ROOM || roomOf(a.key) === CURRENT_ROOM;
 
 // first index of `arr` with arr[i] >= target (arr is sorted ascending)
 function lowerBoundIn(arr, target){
@@ -1299,9 +1299,6 @@ function markDirty(key){ const c = charts.get(key); if (c) c.dirty = true; }
 // ---------------------------------------------------------------------------
 function build(sensors){
   const room = ROOMS_BY_ID.get(CURRENT_ROOM);
-  $("#subtitle").textContent = room
-    ? `${room.floorName} · ${room.name}${room.live ? " · LIVE RIG" : " · simulated"}`
-    : "Environmental & Security Monitoring";
   COLORS = BOOT.colors; SCALES = BOOT.timeScales;
 
   const ws = $("#workspace"), tiles = $("#tiles"), toggles = $("#toggles"),
@@ -1461,7 +1458,9 @@ function openRoom(roomId){
     const ch = charts.get(rec.key);
     if (ch) ch.setAnomaly(rec);
   }
-  refreshBanner();          // the banner is now scoped to this room
+  refreshBanner();          // banner, log and anomaly pane all scope to it now
+  renderLog();
+  renderAnoms();
   // Opening a room means we left the building view; come back to whichever
   // dashboard view was last in use rather than always to Graphs.
   VIEW = LAST_DASH_VIEW;
@@ -1473,9 +1472,10 @@ function showBuilding(){
   CURRENT_ROOM = null;
   VIEW = "building";
   syncViewButtons();
+  renderLog();              // ...and building-wide again on the way out
+  renderAnoms();
   refreshBanner();          // ...and building-wide again on the way out
   document.body.classList.add("view-building");
-  $("#subtitle").textContent = "Building overview";
   Renderers.start();
   setHash("#/building");
 }
@@ -1779,7 +1779,7 @@ async function resync(){
 
   if (restarted){
     $("#log").textContent = "";          // the old process's log is history now
-    (boot.events||[]).forEach(e => addLog(e.msg, e.ts));
+    (boot.events||[]).forEach(e => addLog(e.msg, e.ts, e.room));
     if (TOKEN) setAuth(false);           // tokens die with the process
     addLog("Server restarted — dashboard resynced.");
   } else {
@@ -1788,11 +1788,32 @@ async function resync(){
   setConnected(boot.connected);
 }
 
-function addLog(msg, ts){
+// The log is kept as records, not appended text, because the room you are in
+// filters it: inside a room you see that room's events, plus everything
+// system-wide (logins, ARM/DISARM, the link dropping) which belongs to no room
+// and would be odd to hide. The building view shows the lot.
+const EVENTS = [];
+const EVENT_CAP = 300;
+const eventInScope = e => !CURRENT_ROOM || !e.room || e.room === CURRENT_ROOM;
+const logLine = e =>
+  `[${new Date(e.ts * 1000).toLocaleTimeString()}] ${e.msg}\n`;
+
+function addLog(msg, ts, room){
+  const e = {ts: ts || Date.now() / 1000, msg, room: room || null};
+  EVENTS.push(e);
+  if (EVENTS.length > EVENT_CAP) EVENTS.splice(0, EVENTS.length - EVENT_CAP);
+  if (!eventInScope(e)) return;
   const el = $("#log");
   const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 30;
-  el.textContent += `[${new Date((ts||Date.now()/1000)*1000).toLocaleTimeString()}] ${msg}\n`;
+  el.textContent += logLine(e);
   if (atBottom) el.scrollTop = el.scrollHeight;
+}
+
+/** Rebuild the whole log for the room now on screen. */
+function renderLog(){
+  const el = $("#log");
+  el.textContent = EVENTS.filter(eventInScope).map(logLine).join("");
+  el.scrollTop = el.scrollHeight;
 }
 
 // ---------------------------------------------------------------------------
@@ -1820,19 +1841,20 @@ const esc = s => String(s).replace(/[&<>"]/g, c =>
 
 function renderAnoms(){
   const box = $("#anoms");
-  const shown = [...ANOMS.values()].filter(sevOK)
+  const inRoom = [...ANOMS.values()].filter(anomInScope);
+  const shown = inRoom.filter(sevOK)
                   .sort((a,b) => b.t1 - a.t1 || b.id - a.id)
                   .slice(0, 50);
 
   const openN = shown.filter(a => a.open).length;
   $("#anomCount").textContent = openN ? `${shown.length} · ${openN} live` : shown.length;
   const pill = $("#anomPill");
-  $("#anomPillN").textContent = ANOMS.size;
-  pill.classList.toggle("quiet", ANOMS.size === 0);
+  $("#anomPillN").textContent = inRoom.length;
+  pill.classList.toggle("quiet", inRoom.length === 0);
 
   if (!shown.length){
-    box.innerHTML = `<div class="empty">${ANOMS.size ? "None at this severity."
-                                                    : "Nothing unusual so far."}</div>`;
+    box.innerHTML = `<div class="empty">${inRoom.length ? "None at this severity."
+                                                       : "Nothing unusual so far."}</div>`;
     return;
   }
   box.innerHTML = shown.map(a => `
@@ -1868,10 +1890,6 @@ $("#anoms").addEventListener("click", e => {
 });
 $("#anomShow").addEventListener("change", e => {
   SHOW_ANOMS = e.target.checked;
-  for (const ch of charts.values()) ch.dirty = true;
-});
-$("#anomBand").addEventListener("change", e => {
-  SHOW_BAND = e.target.checked;
   for (const ch of charts.values()) ch.dirty = true;
 });
 $("#anomFilter").addEventListener("change", e => {
@@ -2015,7 +2033,6 @@ const Renderers = {
   active: null,
   running: false,
   _raf: 0,
-  _frames: 0, _fpsAt: 0, _fps: 0,
 
   register(r){
     this.active = r;
@@ -2030,25 +2047,15 @@ const Renderers = {
     r.mounted = true;
     r.mount($("#bStage"));
     r.setFloor(FLOOR_FILTER);
-    this.stat();
   },
 
   start(){
     if (this.running) return;
     this.running = true;
     this.mount();
-    // measure fps from now, not from page load -- otherwise the first sample
-    // divides a handful of frames by the whole lifetime of the tab and reads 0
-    this._fpsAt = performance.now(); this._frames = 0;
-    const loop = now => {
+    const loop = () => {
       if (!this.running) return;
       if (this.active) this.active.update();
-      this._frames++;
-      if (now - this._fpsAt > 500){
-        this._fps = Math.round(this._frames * 1000 / (now - this._fpsAt));
-        this._frames = 0; this._fpsAt = now;
-        this.stat();
-      }
       this._raf = requestAnimationFrame(loop);
     };
     this._raf = requestAnimationFrame(loop);
@@ -2063,13 +2070,6 @@ const Renderers = {
     }
   },
 
-  /** Frame rate, and what the view cost to load. */
-  stat(){
-    const r = this.active;
-    if (!r) return;
-    const kb = r.bytes ? `${(r.bytes/1024).toFixed(0)} KB` : "0 KB — no dependencies";
-    $("#bStat").textContent = `${this._fps} fps · ${kb}`;
-  },
 };
 
 let FLOOR_FILTER = null;   // null = show all floors
@@ -2126,7 +2126,7 @@ function ingestBuilding(boot){
   // the server ships them newest-first; replay oldest-first so ANOMS stays
   // in insertion order and the oldest is the one evicted at the cap
   seedAnomalies(BOOT);
-  (BOOT.events||[]).forEach(e => addLog(e.msg, e.ts));
+  (BOOT.events||[]).forEach(e => addLog(e.msg, e.ts, e.room));
 
   buildBar();
   setConnected(BOOT.connected);   // build() also does this, but only once a room is open
@@ -2153,7 +2153,7 @@ function ingestBuilding(boot){
       }
     } else if (m.type === "anomaly"){ upsertAnomaly(m.anomaly); }
     else if (m.type === "connection"){ setConnected(m.connected); }
-    else if (m.type === "log"){ addLog(m.msg, m.ts); }
+    else if (m.type === "log"){ addLog(m.msg, m.ts, m.room); }
     else if (m.type === "reset"){
       if (m.key === "BASEMENT.FIRE") endFireEpisode();
       _bannerKey = null; refreshBanner();

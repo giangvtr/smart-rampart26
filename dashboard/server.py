@@ -166,7 +166,8 @@ class Hub:
             if not record["open"]:
                 self._log(f"ANOMALY [{record['zone']}·{record['label']}] "
                           f"{record['kindLabel']} ({record['severity']}) — "
-                          f"{record['message']}")
+                          f"{record['message']}",
+                          room=config.SENSORS_BY_KEY[record["key"]].room)
         if prev is not None:
             sdef = config.SENSORS_BY_KEY[reading.key]
             # Every transition matters on the real rig. For the 48 simulated
@@ -175,17 +176,29 @@ class Hub:
             if not sdef.synthetic or reading.state == config.STATE_ALARM:
                 where = sdef.room if sdef.synthetic else reading.zone
                 self._log(f"[{where}·{reading.sensor}] {prev} → {reading.state}"
-                          f" ({reading.value:g} {sdef.unit})")
+                          f" ({reading.value:g} {sdef.unit})", room=sdef.room)
 
     def _on_connection(self, connected: bool) -> None:
         self.connected = connected
         self._broadcast("connection", {"connected": connected})
 
     def _on_notice(self, msg: str) -> None:
-        self._log(msg)
+        # Sources emit plain strings, but the scripted incidents prefix theirs
+        # with the room id ("[G_LOBBY] case disturbed -- simulated incident.").
+        # Recover it so those lines file under the room they happened in;
+        # anything else is system-wide.
+        room = None
+        if msg.startswith("["):
+            token = msg[1:].split("]", 1)[0]
+            if token in building.ROOMS_BY_ID:
+                room = token
+        self._log(msg, room=room)
 
-    def _log(self, msg: str) -> None:
-        entry = {"ts": time.time(), "msg": msg}
+    def _log(self, msg: str, room: str | None = None) -> None:
+        """`room` scopes the line to one room in the UI's event log. Leave it
+        None for anything system-wide (logins, ARM/DISARM, the link going down)
+        -- those stay visible whichever room you are standing in."""
+        entry = {"ts": time.time(), "msg": msg, "room": room}
         self._events.append(entry)
         del self._events[:-200]
         self._broadcast("log", entry)
@@ -285,7 +298,11 @@ class Hub:
             # observes a non-ALARM sample it could infer the boundary from.
             self._broadcast("reset", {"key": f"{zone}.{sensor}"})
         self.storage.record_audit(user, action, f"{zone}.{sensor}")
-        self._log(f"AUDIT: {user} issued {action} {zone}.{sensor}")
+        # An override aimed at one sensor files under its room; SYSTEM/ALL
+        # (ARM/DISARM) is building-wide and stays unscoped.
+        target = config.SENSORS_BY_KEY.get(f"{zone}.{sensor}")
+        self._log(f"AUDIT: {user} issued {action} {zone}.{sensor}",
+                  room=target.room if target else None)
         return True
 
     def ingest(self, payload: dict) -> str:

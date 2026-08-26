@@ -148,13 +148,15 @@ time-scale selector (30 s / 2 min / 5 min / 30 min / All).
   of Graphs/Simple you last used.
 
 Graphs and Simple always show **one room** — the live rig unless you picked
-another in the building view; the subtitle names it, and the URL carries it
-(`#/room/B1_ARCHIVE`) so a room is linkable. The choice of view is remembered.
+another in the building view. The URL carries it (`#/room/B1_ARCHIVE`), so a
+room is linkable. The choice of view is remembered.
 
-The alarm banner follows where you are: building-wide in the building view,
-scoped to the open room once you are inside one. The full-screen **fire alert**
-is the exception — it is building-wide always, so it reaches you even while you
-are looking at a room three floors up.
+The alarm banner, the event log and the anomaly pane all follow where you are:
+building-wide in the building view, scoped to the open room once you are inside
+one. Events belonging to no room (logins, ARM/DISARM, the link dropping) stay
+visible everywhere. The full-screen **fire alert** is the exception — it is
+building-wide always, so it reaches you even while you are looking at a room
+three floors up.
 
 **On a phone** (≤ 760 px), the sidebar becomes a ☰ drawer that slides over the
 content instead of eating half the screen (tap the dimmed area to close it), the

@@ -66,11 +66,17 @@ starts closed), and below 480 px of *height* the colour legend gives up its row
 gesture hint stays. Inside a room the panels tile into a single readable
 column, which is what the existing tiler already does once only one fits.
 
-The alarm banner follows where you are: building-wide in the building view, and
-**scoped to the open room once you are inside one**. Walking someone through a
-dashboard should not be interrupted by a simulated alarm in a gallery they are
-not looking at. The event log and the anomaly pane stay building-wide — they are
-a record, not an interruption.
+The alarm banner, the event log and the anomaly pane all follow where you are:
+building-wide in the building view, and **scoped to the open room once you are
+inside one**. Walking someone through a dashboard should not be interrupted by
+a simulated alarm in a gallery they are not looking at, and with the demo rooms
+on, 49 simulated sensors otherwise bury the real room's log entirely.
+
+Events that belong to no room — logins, ARM/DISARM, the link dropping — stay
+visible whichever room you are standing in; the server tags each log entry with
+a room (or `null`) and the client filters on that. The full-screen **fire
+alert** is the other exception: it is building-wide always, so it reaches you
+even while you are looking at a room three floors up.
 
 Navigation is hash-based, so moving between the building and a room never
 reloads the page: the single SSE connection and the login session both survive.
@@ -158,10 +164,11 @@ own beyond how many pixels a metre is worth on screen, so a room can be moved,
 re-equipped or re-furnished without opening any JavaScript. Adding an exhibit
 type is one entry in `POSES` and one line in `furnish()`.
 
-Two things are building-wide and outlive any one room, so they are seeded once
+Three things are building-wide and outlive any one room, so they are seeded once
 at boot rather than inside `build()`: the `STATES` map behind the banner and the
-room colours, and the `ANOMS` list behind the anomaly pane. `openRoom()` replays
-both onto the charts it has just built.
+room colours, the `ANOMS` list behind the anomaly pane, and the `EVENTS` list
+behind the log. `openRoom()` replays the anomalies onto the charts it has just
+built, and re-renders the log and the pane through the room filter.
 
 The renderer talks to the page through one small object and nothing else:
 
