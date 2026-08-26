@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
 )
 from pyqtgraph.dockarea import Dock, DockArea
 
+import anomaly
 import config
 from panels import AlarmBanner, ControlPanel, LoginDialog, SensorPanel, StatusPanel
 from security import Session
@@ -67,6 +68,8 @@ class MainWindow(QMainWindow):
         self.storage = Storage()
         self.session = Session()
         self.source = make_source()
+        # same engine the web dashboard uses -- see anomaly.py
+        self.detector = anomaly.AnomalyEngine()
         self._connected = False
         self._last_seen: dict[str, float] = {}
 
@@ -174,6 +177,19 @@ class MainWindow(QMainWindow):
         self._last_seen[reading.key] = time.time()
         prev_state = self.storage.record_reading(reading)
         self.status_panel.update_sensor(reading.key, reading.value, reading.state)
+
+        for record in self.detector.feed(reading):
+            panel = self.sensor_panels.get(record["key"])
+            if panel is not None:
+                # hand over every window for this sensor, not just the changed
+                # one -- the panel redraws its whole overlay each refresh
+                panel.set_anomalies([a for a in self.detector.recent(60)
+                                     if a["key"] == record["key"]])
+            if not record["open"]:
+                self._log(f"ANOMALY [{record['zone']}·{record['label']}] "
+                          f"{record['kindLabel']} ({record['severity']}) — "
+                          f"{record['message']}")
+
         if prev_state is not None:
             self._log(
                 f"[{reading.zone}·{reading.sensor}] {prev_state} -> {reading.state}"
@@ -189,8 +205,11 @@ class MainWindow(QMainWindow):
         self.banner.set_active(bool(alarm_zones), alarm_zones)
 
     def _on_command(self, cmd) -> None:
-        if not self.session.authenticated:
-            QMessageBox.warning(self, "Login required", "Log in before sending overrides.")
+        # Overrides need the 'guard' credential, not just any login -- a
+        # 'viewer' account may watch the dashboard but not act on it.
+        if not self.session.can("guard"):
+            QMessageBox.warning(self, "Login required",
+                                "Log in as 'guard' before sending overrides.")
             return
         self.source.send_command(cmd)
         actor = self.session.user or "unknown"
@@ -203,15 +222,23 @@ class MainWindow(QMainWindow):
         if dlg.exec():
             user, pw = dlg.credentials()
             if self.session.login(user, pw):
-                self.control_panel.set_authenticated(True, self.session.user)
-                self.storage.record_audit(self.session.user, "LOGIN", "")
-                self._log(f"Agent '{self.session.user}' logged in.")
+                is_guard = self.session.can("guard")
+                self.control_panel.set_authenticated(is_guard, self.session.user)
+                self.storage.record_audit(self.session.user, "LOGIN",
+                                          f"desktop:{self.session.role}")
+                self._log(f"Agent '{self.session.user}' logged in "
+                          f"({self.session.role}).")
+                if not is_guard:
+                    QMessageBox.information(
+                        self, "Viewer login",
+                        "Logged in as a viewer — monitoring only. "
+                        "The override controls need the 'guard' credential.")
             else:
                 QMessageBox.critical(self, "Login failed", "Invalid username or password.")
 
     def _do_logout(self) -> None:
         if self.session.authenticated:
-            self.storage.record_audit(self.session.user, "LOGOUT", "")
+            self.storage.record_audit(self.session.user, "LOGOUT", "desktop")
             self._log(f"Agent '{self.session.user}' logged out.")
         self.session.logout()
         self.control_panel.set_authenticated(False)

@@ -39,7 +39,7 @@ class RingBuffer:
         self._s.append(state)
 
     def arrays(self):
-        """Return (times, values) as plain lists for pyqtgraph."""
+        """Return (times, values) as plain lists (pyqtgraph / JSON)."""
         return list(self._t), list(self._v)
 
     @property

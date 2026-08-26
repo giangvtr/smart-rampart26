@@ -44,7 +44,8 @@ STATE_COLORS = {
 class SensorDef:
     def __init__(self, key, zone, label, unit, warn, alarm,
                  vmin, vmax, latched=False, period_s=2.0,
-                 room=None, synthetic=False, kind="analog"):
+                 room=None, synthetic=False, kind="analog",
+                 detect_anomalies=True):
         self.key = key            # unique id, e.g. "GALLERY.TEMP"
         self.zone = zone
         self.label = label
@@ -61,6 +62,10 @@ class SensorDef:
         # synthetic = simulated demo room, never written to SQLite/CSV
         self.synthetic = synthetic
         self.kind = kind          # "analog" (wanders) or "event" (blips)
+        # Whether anomaly.py should watch this stream. Off for on/off sensors:
+        # a 0/1 signal has no "normal spread" to learn, so every trip would
+        # score as an infinite deviation. Motion is covered by its alarm latch.
+        self.detect_anomalies = detect_anomalies
 
     @property
     def sensor(self) -> str:
@@ -85,7 +90,7 @@ SENSORS = [
               room=LIVE_ROOM),
     SensorDef("GALLERY.MOTION",   "GALLERY",  "Motion",      "bool",
               warn=None, alarm=(None, 0.5), vmin=0, vmax=1, latched=True, period_s=0.5,
-              room=LIVE_ROOM, kind="event"),
+              room=LIVE_ROOM, kind="event", detect_anomalies=False),
     SensorDef("BASEMENT.WATER",   "BASEMENT", "Water level", "adc",
               warn=(None, 100), alarm=(None, 300), vmin=0, vmax=600, latched=True, period_s=2.0,
               room=LIVE_ROOM),
@@ -104,6 +109,9 @@ for _room in building.ROOMS:
             warn=_t["warn"], alarm=_t["alarm"], vmin=_t["vmin"], vmax=_t["vmax"],
             latched=_t["latched"], period_s=_t["period_s"],
             room=_room.id, synthetic=True, kind=_t["kind"],
+            # same rule as the real rig: an on/off stream has no spread for
+            # anomaly.py to learn from, so only the analog kinds are watched
+            detect_anomalies=(_t["kind"] == "analog"),
         ))
 
 SENSORS_BY_KEY = {s.key: s for s in SENSORS}
@@ -131,7 +139,7 @@ RING_BUFFER_POINTS = 7200
 SYNTH_RING_POINTS = 900
 BOOTSTRAP_SYNTH_POINTS = 300
 
-# time-scale presets for the per-panel combo box: (label, seconds or None=all)
+# time-scale presets for the per-panel time-scale selector: (label, seconds or None=all)
 TIME_SCALES = [
     ("30 s", 30),
     ("2 min", 120),
@@ -141,8 +149,57 @@ TIME_SCALES = [
 ]
 DEFAULT_TIME_SCALE_INDEX = 1  # "2 min"
 
-UI_REFRESH_MS = 250     # plot repaint cadence
-BANNER_FLASH_MS = 500   # alarm banner flash cadence
+UI_REFRESH_MS = 250     # plot repaint cadence (desktop UI)
+BANNER_FLASH_MS = 500   # alarm banner flash cadence (desktop UI)
+
+# --------------------------------------------------------------------------
+# Anomaly detection (see anomaly.py)
+# --------------------------------------------------------------------------
+# Unlike the warn/alarm bands above, none of this is per-sensor: the detector
+# learns each stream's own normal and flags where the *shape* breaks. These are
+# the knobs for how twitchy that is. Defaults are tuned for the 0.5-2 s sample
+# periods above; raise `level_z` / `delta_z` for fewer, more certain flags.
+ANOMALY_ENABLED = True
+
+ANOMALY = {
+    # -- learning the baseline --
+    # Short on purpose. These streams wander, so a long baseline lags behind
+    # where the signal actually is and the lag alone starts scoring as a
+    # deviation. Short enough to follow the wander, long enough that a real
+    # step still stands out against it.
+    "baseline_window_s": 45.0,   # how far back "normal" is learned from
+    "min_baseline_points": 15,   # warm-up: nothing is flagged before this
+    "min_sigma_frac": 0.004,     # sigma floor as a fraction of the y-range,
+                                 # so a quiet stream cannot make every wobble
+                                 # look like a 50-sigma event
+    # -- point-wise tests --
+    "level_z": 4.0,              # robust z on the value that opens a window
+    "delta_z": 5.0,              # robust z on the sample-to-sample step:
+                                 # above this the onset counts as "abrupt"
+    "spike_max_s": 6.0,          # shorter than this -> a spike...
+    "shift_min_s": 15.0,         # ...longer, and abrupt -> a level shift
+    "close_after_s": 6.0,        # this long back inside normal closes a window
+    "max_open_s": 25.0,          # a window cannot outlive this: past it the new
+                                 # level is adopted as the baseline. The report
+                                 # is about the *change*, so it marks the
+                                 # transition, not the whole rest of the run.
+    # -- condition tests --
+    "flatline_min_s": 45.0,      # near-zero variation this long -> stuck sensor
+    "flatline_frac": 0.25,       # "near-zero" = this fraction of the stream's
+                                 # own normal per-sample step (NOT of the y-range:
+                                 # a wide-range sensor barely moves within its
+                                 # range even when perfectly healthy)
+    "noise_factor": 4.0,         # recent spread vs baseline -> noise burst
+    "noise_min_s": 20.0,
+    "drift_window_s": 90.0,      # sustained one-way movement
+    "drift_r2": 0.85,            # must fit a straight line this well...
+    "drift_k": 4.0,              # ...and travel this many times further than a
+                                 # driftless random walk would over the same
+                                 # window (see the note in anomaly.py -- R^2 on
+                                 # its own calls every wander a trend)
+    # -- retention --
+    "keep": 200,                 # anomalies kept in memory per process run
+}
 
 # --------------------------------------------------------------------------
 # Transport defaults (for the real Arduino path — serial / Bluetooth-classic)
