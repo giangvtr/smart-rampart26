@@ -59,7 +59,8 @@ charts are drawn on plain `<canvas>` with **no charting library**, so it works
 with no internet at the venue. Live data arrives over Server-Sent Events.
 
 The 3D building view keeps that promise too: it is CSS transforms and a single
-758-line script, so it downloads nothing either.
+864-line script, so it downloads nothing either. It is driven by one finger
+and a pinch on a phone as well as by a mouse.
 
 Options: `python server.py --port 9000 --host 0.0.0.0`
 

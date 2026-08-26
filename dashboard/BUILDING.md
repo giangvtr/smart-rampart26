@@ -6,18 +6,53 @@ room. One room — **B1 · Archive & Vault** — is the real hardware rig. The o
 11 are simulated, so the dashboard can be shown at building scale.
 
 It is drawn with **CSS 3D transforms and nothing else**: no WebGL, no npm, no
-CDN, no build step. The whole view is one 758-line file plus the geometry the
+CDN, no build step. The whole view is one 864-line file plus the geometry the
 server already sends.
 
 ## Getting around
 
-| | |
-|---|---|
-| **Orbit** | drag anywhere on the stage |
-| **Zoom** | mouse wheel |
-| **Isolate a floor** | the floor tabs; the other storeys drop to 7 % opacity **and stop taking clicks**, which is how you reach a basement room hidden under the ground floor |
-| **Open a room** | click it — or deep-link straight to `#/room/F1_JEWELS` |
-| **Peek without opening** | hover for live values per sensor |
+| | mouse | touch |
+|---|---|---|
+| **Orbit** | drag anywhere on the stage | one finger |
+| **Zoom** | wheel | pinch |
+| **Open a room** | click it — or deep-link straight to `#/room/F1_JEWELS` | tap it |
+| **Peek without opening** | hover for live values per sensor | — (a finger taps; it does not hover) |
+| **Isolate a floor** | the floor tabs; the other storeys drop to 7 % opacity **and stop taking clicks**, which is how you reach a basement room hidden under the ground floor ||
+
+Mouse and touch come down the same path, because pointer events unify them.
+Two details are worth knowing if you touch this code:
+
+- **There is no `click` listener in the scene.** Orbiting has to survive the
+  pointer leaving the stage, which means pointer capture, and capture retargets
+  the browser's own click to the capture element — so a listener on a room div
+  never fires. A tap is recognised in `bindCamera()` instead: pointer down,
+  pointer up, less than a few pixels of travel. Fingers get more slop than mice.
+- **The stage sets `touch-action: none`.** Without it the browser claims
+  one-finger drags for scrolling and two-finger ones for its own page zoom, and
+  the camera never sees either.
+
+## On a phone
+
+The building view is the landing page, so it has to survive being opened on a
+phone — and at zoom 1 the ground plate alone is 520 x 338 px before the storeys
+stack on top, which drops the visitor *inside* the ground floor looking at one
+room. So the opening zoom is measured off the stage rather than assumed
+(`fitZoom()`), and re-measured whenever the stage changes shape — rotation,
+mobile browser chrome hiding itself, coming back from a room — until the
+visitor pinches, after which the zoom is theirs and we stop moving it.
+
+| stage | opening zoom | museum on screen |
+|---|---|---|
+| desktop 1574 x 656 | 0.91 | 599 x 550 |
+| phone portrait 390 x 664 | 0.52 | 338 x 311 |
+| phone landscape 844 x 268 | 0.37 | 244 x 224 |
+
+The frame around the stage is trimmed to match: below 720 px the sidebar
+becomes a drawer over the workspace instead of a 290 px column beside it (and
+starts closed), and below 480 px of *height* the colour legend gives up its row
+— a red room explains itself, whereas how to drive the thing does not, so the
+gesture hint stays. Inside a room the panels tile into a single readable
+column, which is what the existing tiler already does once only one fits.
 
 The alarm banner follows where you are: building-wide in the building view, and
 **scoped to the open room once you are inside one**. Walking someone through a

@@ -37,6 +37,9 @@ const ROOM_Z     = 0.6;         // px a room floats above its floor slab, so
                                 // the two are never coplanar for hit-testing
 const HOVER_LIFT = 10;          // px a room rises under the cursor
 const CLICK_SLOP = 5;           // px of movement still counted as a click
+const TAP_SLOP   = 14;          // ...and the same for a finger, which is
+                                // nowhere near as steady as a mouse
+const ZOOM_MIN   = 0.22, ZOOM_MAX = 2.6;
 
 const state = {
   el: null, scene: null, host: null,
@@ -44,6 +47,8 @@ const state = {
   spin: -34, tilt: 58, zoom: 1,
   floor: null,
   hover: null, dirty: true,
+  // once the visitor has zoomed for themselves, stop re-fitting under them
+  userZoom: false,
 };
 
 // --- helpers --------------------------------------------------------------
@@ -353,6 +358,7 @@ function buildScene(host){
   }
 
   bindCamera();
+  fitZoom();
   state.dirty = true;
   applyCamera();
 }
@@ -502,8 +508,15 @@ function addRoom(floorEl, room){
     dots.set(key, d);
   });
 
-  rEl.addEventListener("pointerenter", () => { state.hover = room.id; showTip(room); });
-  rEl.addEventListener("pointermove", moveTip);
+  // A finger has no hover: it taps. Showing the tooltip on touch would leave
+  // it stranded on screen afterwards, covering the room it describes.
+  rEl.addEventListener("pointerenter", e => {
+    if (e.pointerType === "touch") return;
+    state.hover = room.id; showTip(room);
+  });
+  rEl.addEventListener("pointermove", e => {
+    if (e.pointerType !== "touch") moveTip(e);
+  });
   rEl.addEventListener("pointerleave", () => {
     state.hover = null; document.getElementById("bTip").style.display = "none";
   });
@@ -640,41 +653,124 @@ function moveTip(e){
 }
 
 // --- camera + picking -----------------------------------------------------
+
+/** Clamp, apply, and note that the zoom is now the visitor's, not ours. */
+function setZoom(z){
+  state.zoom = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, z));
+  state.userZoom = true;
+  state.dirty = true;
+}
+
+/* Zoom so the whole museum fits the stage.
+ *
+ * At zoom 1 the ground plate alone is 520x338 px before the storeys stack on
+ * top of it, which on a phone drops the visitor inside the ground floor
+ * looking at one room -- not a building overview. So the opening zoom is
+ * measured off the stage rather than assumed, and re-measured whenever the
+ * stage changes size (a phone turned sideways is a different stage) until the
+ * visitor pinches for themselves.
+ */
+function fitZoom(){
+  const host = state.host, B = MG.building;
+  if (!host || !B) return;
+  const r = host.getBoundingClientRect();
+  if (r.width < 40 || r.height < 40) return;      // still display:none
+
+  const a = state.spin * Math.PI / 180, t = state.tilt * Math.PI / 180;
+  const W = B.floorW * PX_PER_M, D = B.floorD * PX_PER_M;
+  // the plate's bounding box once it has been spun...
+  const w = Math.abs(W * Math.cos(a)) + Math.abs(D * Math.sin(a));
+  const d = Math.abs(W * Math.sin(a)) + Math.abs(D * Math.cos(a));
+  // ...and everything standing up out of it: the storey stack, the walls, and
+  // the room captions floating above the top floor
+  const lv = B.floors.map(f => f.level);
+  const tall = (Math.max(...lv) - Math.min(...lv)) * FLOOR_GAP
+             + (B.wallH + 2.5) * VPM;
+  // the tilt lays the depth down and stands the height up
+  const h = d * Math.cos(t) + tall * Math.sin(t);
+
+  // 90px of slack on x for the floor captions parked off the east edge
+  const z = Math.min(r.width / (w + 90), r.height / (h + 30)) * 0.94;
+  state.zoom = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, z));
+  state.dirty = true;
+}
+
+/* Camera input. Mouse and touch arrive down the same path, because pointer
+ * events unify them: one pointer orbits, two pinch to zoom, and a pointer that
+ * goes down and comes up without travelling opens the room underneath it.
+ *
+ * There is no `click` listener anywhere in the scene, and that is deliberate:
+ * taking pointer capture -- which we need, so an orbit survives the pointer
+ * leaving the stage -- retargets the browser's own click to the capture
+ * element, so a listener on a room div never fires. Taps are recognised here.
+ */
 function bindCamera(){
   const host = state.host;
-  let drag = null;
+  const pts = new Map();          // live pointers: id -> {x, y}
+  let drag = null;                // one-pointer orbit
+  let pinch = null;               // two-pointer zoom
+
+  const spread = () => {
+    const [a, b] = [...pts.values()];
+    return Math.hypot(a.x - b.x, a.y - b.y);
+  };
+  const orbitFrom = (x, y, room, slop) => ({
+    x, y, room, spin: state.spin, tilt: state.tilt,
+    slop: room ? slop : -1,       // slop < 0: this gesture can never be a tap
+  });
 
   host.addEventListener("pointerdown", e => {
-    if (e.button !== 0) return;
-    drag = {
-      x: e.clientX, y: e.clientY, spin: state.spin, tilt: state.tilt,
-      // Remember the room under the cursor NOW. Once we take pointer capture
-      // the browser retargets the eventual `click` to the capture element, so
-      // a listener on the room div itself never fires with a real mouse --
-      // which was exactly the bug this replaces. Drag-vs-click is decided on
-      // pointerup instead, by how far the pointer travelled.
-      room: e.target.closest ? e.target.closest(".room") : null,
-    };
-    host.classList.add("dragging");
+    if (e.pointerType === "mouse" && e.button !== 0) return;
+    pts.set(e.pointerId, {x: e.clientX, y: e.clientY});
     // throws for a synthetic pointer event with no live pointer id
     try{ host.setPointerCapture(e.pointerId); }catch(_){}
+
+    if (pts.size === 1){
+      // Remember the room under the pointer NOW -- see the note above.
+      drag = orbitFrom(e.clientX, e.clientY,
+                       e.target.closest ? e.target.closest(".room") : null,
+                       e.pointerType === "mouse" ? CLICK_SLOP : TAP_SLOP);
+      host.classList.add("dragging");
+    } else if (pts.size === 2){
+      drag = null;                          // a second finger ends the orbit...
+      host.classList.remove("dragging");
+      pinch = {d: spread() || 1, zoom: state.zoom};    // ...and rules out a tap
+    }
   });
 
   host.addEventListener("pointermove", e => {
-    if (!drag) return;
-    state.spin = drag.spin + (e.clientX - drag.x) * 0.32;
-    state.tilt = Math.max(6, Math.min(89, drag.tilt - (e.clientY - drag.y) * 0.28));
-    state.dirty = true;
+    const p = pts.get(e.pointerId);
+    if (!p) return;
+    p.x = e.clientX; p.y = e.clientY;
+
+    if (pinch && pts.size >= 2){
+      setZoom(pinch.zoom * (spread() / pinch.d));
+    } else if (drag){
+      state.spin = drag.spin + (e.clientX - drag.x) * 0.32;
+      state.tilt = Math.max(6, Math.min(89, drag.tilt - (e.clientY - drag.y) * 0.28));
+      state.dirty = true;
+    }
   });
 
   const end = e => {
-    if (!drag) return;
+    if (!pts.delete(e.pointerId)) return;
+    try{ host.releasePointerCapture(e.pointerId); }catch(_){}
+
+    if (pinch){
+      // Lifting one of two fingers hands the camera back to the other, which
+      // keeps orbiting from wherever it now is -- but the gesture was a pinch,
+      // and a pinch must never also open a room.
+      pinch = null;
+      const rest = [...pts.values()][0];
+      drag = rest ? orbitFrom(rest.x, rest.y, null, 0) : null;
+      return;
+    }
+
     const d = drag;
     drag = null;
     host.classList.remove("dragging");
-    try{ host.releasePointerCapture(e.pointerId); }catch(_){}
-    if (e.type !== "pointerup" || !d.room) return;
-    if (Math.hypot(e.clientX - d.x, e.clientY - d.y) > CLICK_SLOP) return;   // orbited
+    if (!d || !d.room || d.slop < 0 || e.type !== "pointerup") return;
+    if (Math.hypot(e.clientX - d.x, e.clientY - d.y) > d.slop) return;   // orbited
     MG.openRoom(d.room.dataset.room);
   };
   host.addEventListener("pointerup", end);
@@ -682,9 +778,15 @@ function bindCamera(){
 
   host.addEventListener("wheel", e => {
     e.preventDefault();
-    state.zoom = Math.max(0.35, Math.min(2.6, state.zoom * (e.deltaY > 0 ? 0.9 : 1.1)));
-    state.dirty = true;
+    setZoom(state.zoom * (e.deltaY > 0 ? 0.9 : 1.1));
   }, {passive: false});
+
+  // Re-fit while the zoom is still ours to choose. The stage changes size on
+  // rotate, when mobile browser chrome hides itself, and on the way back in
+  // from a room dashboard.
+  const refit = () => { if (!state.userZoom) fitZoom(); };
+  if (window.ResizeObserver) new ResizeObserver(refit).observe(host);
+  else window.addEventListener("resize", refit);
 }
 
 function applyCamera(){
@@ -745,7 +847,11 @@ MG.register({
 
   mount(host){
     if (!state.el) buildScene(host);
-    else { host.appendChild(state.el); state.dirty = true; }
+    else {
+      host.appendChild(state.el);
+      if (!state.userZoom) fitZoom();      // the stage may be a new shape now
+      state.dirty = true;
+    }
   },
   unmount(){
     if (state.el && state.el.parentNode) state.el.parentNode.removeChild(state.el);

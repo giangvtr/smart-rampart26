@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>MuseumGuard</title>
 <style>
   :root{
@@ -15,8 +15,12 @@
   }
   *{box-sizing:border-box}
   html,body{height:100%}
+  /* On a phone, 100% is the tallest the viewport ever gets, so the bottom of
+     the page hides under the browser's own chrome. dvh is the visible height. */
+  @supports (height:100dvh){ html,body{height:100dvh} }
   body{
     margin:0; background:var(--bg); color:var(--text); overflow:hidden;
+    overscroll-behavior:none;      /* no pull-to-refresh mid-orbit */
     font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
     display:flex; flex-direction:column;
   }
@@ -82,6 +86,11 @@
   /* the stage is the 3D viewport: a perspective root for the CSS 3D scene */
   #bStage{
     flex:1; min-height:0; position:relative; overflow:hidden; cursor:grab;
+    /* the renderer handles every gesture itself -- without this the browser
+       claims one-finger drags for scrolling and two for its own page zoom,
+       and the camera never sees them */
+    touch-action:none; user-select:none; -webkit-user-select:none;
+    -webkit-tap-highlight-color:transparent;
     background:
       radial-gradient(ellipse 70% 55% at 50% 42%, #1b2532 0%, transparent 70%),
       linear-gradient(#0c0f13, #05070a);
@@ -286,6 +295,50 @@
   .dlg label{display:block; font-size:12px; color:var(--muted); margin:10px 0 4px}
   .dlg input{width:100%}
   .err{color:#ffa198; font-size:12px; margin-top:10px; display:none}
+
+  /* ---------- narrow screens ----------
+     The building view is the part that has to work on a phone: it is the
+     landing page, and it is what gets handed to someone on a device. Every
+     rule here buys vertical space back for the stage. The floating-window
+     dashboard behind it is still a desktop shape. */
+  @media (max-width:720px){
+    header{padding:6px 9px; gap:7px}
+    .brand{font-size:14px}
+    .brand span{display:none}          /* the subtitle only repeats the view */
+    #anomPill{display:none}
+    header button{padding:5px 9px; font-size:12px}
+    .pill{padding:3px 9px; font-size:11px}
+    /* the panels tile themselves into one column here and there is nothing to
+       drag them out of, so the reset is a desktop affordance -- and dropping it
+       is what keeps the header on one line */
+    #resetLayout{display:none}
+    #banner{padding:5px 10px; font-size:12px}
+    #bBar{padding:5px 9px; gap:8px}
+    #bBar .bgrp button{padding:5px 9px}
+    #bLegend{padding:5px 10px; gap:12px; font-size:10.5px}
+    #bLegend .hint{margin-left:0; flex-basis:100%; opacity:.9}
+
+    /* 290px of sidebar on a 390px screen leaves no dashboard, so inside a room
+       it becomes a drawer over the workspace instead of a column beside it */
+    aside{
+      position:absolute; z-index:60; top:0; bottom:0; left:0;
+      width:86%; max-width:290px; box-shadow:0 22px 60px rgba(0,0,0,.66);
+    }
+    body.side-collapsed aside{margin-left:-100%}
+  }
+
+  /* A phone on its side has ~390px of height for the whole page, and the frame
+     around the stage was eating a third of it. The colour swatches are the
+     first thing to go -- a red room explains itself; how to drive the thing
+     does not, so the hint stays. */
+  @media (max-height:480px){
+    header{padding:4px 9px}
+    #banner{padding:4px 10px; font-size:12px}
+    #bBar{padding:4px 9px}
+    #bLegend{padding:3px 10px}
+    #bLegend span:not(.hint){display:none}
+    #bLegend .hint{margin-left:0; flex-basis:auto}
+  }
 </style>
 </head>
 <body>
@@ -363,7 +416,7 @@
     <span><i style="background:var(--warn)"></i>Warning</span>
     <span><i style="background:var(--alarm)"></i>Alarm</span>
     <span><i class="livedot"></i>Live hardware</span>
-    <span class="hint">drag to orbit · wheel to zoom · click a room</span>
+    <span class="hint" id="bHint">drag to orbit · wheel to zoom · click a room</span>
   </div>
 </section>
 
@@ -1483,6 +1536,14 @@ document.querySelector("aside").addEventListener("click", e => {
   sendCommand(b.dataset.zone, b.dataset.sensor, b.dataset.action);
 });
 
+// A drawer covering the whole workspace is not a useful thing to land on, and
+// loadLayout() only ever adds this class, so setting it here is not overridden
+// by a room that was last left with the sidebar open on a desktop.
+if (matchMedia("(max-width:720px)").matches){
+  document.body.classList.add("side-collapsed");
+  $("#sideToggle").textContent = "\u203a";
+}
+
 $("#sideToggle").addEventListener("click", () => {
   const c = document.body.classList.toggle("side-collapsed");
   $("#sideToggle").textContent = c ? "›" : "‹";
@@ -1609,6 +1670,10 @@ function buildBar(){
   mk(null, "All floors", "Show every floor");
   for (const f of floors) mk(f.id, f.name, `Isolate ${f.name}`);
   tabs.querySelector("button").classList.add("on");
+
+  // name the instrument actually in the visitor's hand
+  if (matchMedia("(pointer: coarse)").matches)
+    $("#bHint").textContent = "one finger to orbit · pinch to zoom · tap a room";
 
   $("#backBtn").addEventListener("click", showBuilding);
 }
