@@ -21,7 +21,7 @@ from machine import ADC, Pin
 WIFI_SSID = "Hotspot"
 WIFI_PASS = "hahahaha"       # hotspot password
 SERVER = "http://192.168.95.204:8000/api/ingest"   # <-- PC's IP on the hotspot + port (dashboard defaults to :8000)
-ZONE = "GAL01"
+ZONE = "BASE01"        # BASE01 -> BASEMENT (the only zone the dashboard has)
 
 WATER_PIN = 26          # ADC0 on GP26
 PERIOD_S = 2            # same 2s heartbeat

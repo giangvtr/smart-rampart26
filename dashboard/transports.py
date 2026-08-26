@@ -51,17 +51,13 @@ class SimulatedSource(Source):
     """Generates fake but plausible data for every configured sensor and honors
     commands so the disarm/override flow is fully demoable with no Arduino.
 
-    Latching mirrors the firmware FSM: water & motion, once in ALARM, stay in
-    ALARM until a RESET command (or, for motion, a DISARM) clears them.
+    Latching mirrors the firmware FSM: water & fire, once in ALARM, stay in
+    ALARM until a RESET command clears them.
     """
 
     # resting value each stream wanders around; anything not listed starts
     # mid-range (see __init__)
     BASE_SEEDS = {
-        "GALLERY.TEMP": 21.0,
-        "GALLERY.HUMIDITY": 50.0,
-        "GALLERY.LIGHT": 300.0,
-        "GALLERY.MOTION": 0.0,
         "BASEMENT.WATER": 40.0,
         "BASEMENT.TEMP": 19.0,
         "BASEMENT.HUMIDITY": 52.0,
@@ -72,7 +68,10 @@ class SimulatedSource(Source):
         super().__init__(codec, parent)
         self._thread: threading.Thread | None = None
         self._running = False
-        self._armed = True                    # security sub-state (ARMED at night)
+        # System armed state. With the Gallery motion sensor gone nothing here
+        # reads it any more -- it is mirrored to the nodes (which silence their
+        # local alarm on DISARM) and shown in the event log.
+        self._armed = True
         self._latched: dict[str, bool] = {}   # sensor.key -> latched-in-alarm
         # Smooth baselines per sensor for a natural wander. Built from
         # config.SENSORS rather than hard-coded, so adding a sensor there does
@@ -102,7 +101,6 @@ class SimulatedSource(Source):
         # exactly the path the real node would react to -- but in-process.
         if cmd.action == "DISARM":
             self._armed = False
-            self._latched["GALLERY.MOTION"] = False
             self.notice.emit("System DISARMED (alarms suppressed for maintenance).")
         elif cmd.action == "ARM":
             self._armed = True
@@ -128,16 +126,6 @@ class SimulatedSource(Source):
     def _sample(self, sdef, now: float):
         key = sdef.key
         base = self._base[key]
-
-        if key == "GALLERY.MOTION":
-            # random blips; only meaningful while ARMED
-            triggered = self._armed and random.random() < 0.03
-            if triggered:
-                self._latched[key] = True
-            latched = self._latched.get(key, False)
-            value = 1.0 if (latched and self._armed) else 0.0
-            state = config.STATE_ALARM if (latched and self._armed) else config.STATE_OK
-            return value, state
 
         # environmental / water: wander around baseline, occasional excursion
         base += random.uniform(-0.4, 0.4)
@@ -306,8 +294,8 @@ class HttpIngestSource(Source):
     never open a connection *to* the ESP32, so it works behind NAT and in Wokwi.
 
     Latching + arming live here (server-side), mirroring SimulatedSource and the
-    firmware FSM: water/motion stay in ALARM until a RESET (or DISARM for
-    motion), even after the raw value recovers. A watchdog marks a silent node
+    firmware FSM: water/fire stay in ALARM until a RESET, even after the raw
+    value recovers. A watchdog marks a silent node
     DISCONNECTED after HEARTBEAT_TIMEOUT_S instead of showing stale data as live.
     """
 
@@ -315,6 +303,8 @@ class HttpIngestSource(Source):
 
     def __init__(self, codec: Codec | None = None, parent=None):
         super().__init__(codec or JsonCodec(), parent)
+        # See SimulatedSource._armed -- tracked and mirrored to the nodes, but
+        # with no motion sensor nothing on this side gates on it.
         self._armed = True
         self._latched: dict[str, bool] = {}       # sensor.key -> latched-in-alarm
         self._pending: dict[str, list[str]] = {}  # canonical zone -> queued actions
@@ -352,7 +342,6 @@ class HttpIngestSource(Source):
         action = cmd.action.upper()
         if action == "DISARM":
             self._armed = False
-            self._latched["GALLERY.MOTION"] = False
             self.notice.emit("System DISARMED (alarms suppressed for maintenance).")
             self._queue_all("DISARM")
         elif action == "ARM":
@@ -408,16 +397,6 @@ class HttpIngestSource(Source):
         if sdef is None:
             return
         key = sdef.key
-
-        if sensor == "MOTION":
-            triggered = self._armed and value >= 0.5
-            if triggered:
-                self._latched[key] = True
-            latched = self._latched.get(key, False) and self._armed
-            out_value = 1.0 if latched else 0.0
-            state = config.STATE_ALARM if latched else config.STATE_OK
-            self.reading_received.emit(Reading(zone, sensor, out_value, state))
-            return
 
         state = classify(sdef, value)
         if sdef.latched:

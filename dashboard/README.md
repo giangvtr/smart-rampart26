@@ -1,8 +1,8 @@
 # MuseumGuard — Dashboard
 
-Monitoring station for the MuseumGuard sensor rig (temp/humidity, light, motion
-in the Gallery; water level, temp/humidity and fire in the Basement). Live charts
-in floating, snappable windows — or a phone-friendly **Simple** board of
+Monitoring station for the MuseumGuard sensor rig: four Basement sensors —
+**water level, temperature, humidity and fire**. Live charts in a 2x2 of
+floating, snappable windows — or a phone-friendly **Simple** board of
 colour-coded value boxes — colour-coded alarm states, a flashing alarm banner,
 a full-screen fire alert, login-gated alarm override/disarm, and zero-install
 local logging.
@@ -17,7 +17,7 @@ Working end to end, on simulated data:
 - ✅ Web UI (stdlib server + SSE, canvas charts, floating-window workspace, plus
   a simple value-box view that works on a phone).
 - ✅ Desktop UI (PySide6 + pyqtgraph docks) — feature-equivalent.
-- ✅ Simulator with latching water/motion alarms that honour ARM/DISARM/RESET.
+- ✅ Simulator with latching water/fire alarms that honour ARM/DISARM/RESET.
 - ✅ SQLite + daily CSV logging, audit trail for logins and overrides.
 - ✅ Two-tier PBKDF2 login: a `viewer` password gates the dashboard itself, a
   separate `guard` password gates the override/disarm controls.
@@ -140,7 +140,8 @@ still yours — **Graphs** works on a phone too, it just stops floating:
   work as usual. Rotate to a wide screen and the floating workspace comes back.
 
 **Windows (web):** every sensor is a floating window in a desktop-style
-workspace.
+workspace, laid out by default as a **2x2 filling the workspace** — four
+sensors, two columns, no scrolling.
 
 - **Move** by dragging the title bar; **resize** from any edge or corner.
 - **Snap** like Windows: drag to the top edge to maximise, to the left/right
@@ -154,9 +155,14 @@ workspace.
   minimised one to bring it back.
 - The sidebar **Panels** checkboxes open/close windows too, and **‹** collapses
   the whole sidebar for more chart space.
-- **Reset layout** (top bar) restores the default two-column tiling and reopens
-  everything. Otherwise the arrangement — positions, sizes, z-order, what's
-  closed, sidebar state — is saved to `localStorage` and restored on reload.
+- **Reset layout** (top bar) restores the default 2x2 and reopens everything.
+  Otherwise the arrangement — positions, sizes, z-order, what's closed, sidebar
+  state — is saved to `localStorage` and restored on reload. (The saved-layout
+  key is versioned; it was bumped when the Gallery sensors were dropped, so an
+  old 8-window layout can't strand the four survivors in the bottom half.)
+- With a single zone the redundant `BASEMENT ·` prefix is dropped from panel
+  titles, status tiles, taskbar and reset buttons. It reappears on its own if a
+  second zone is ever added to `config.SENSORS`.
 
 **Docks (desktop):** panels are pyqtgraph docks — drag to rearrange, drag edges
 to resize, drag out to float, **×** to close, and the **View** menu re-adds
@@ -167,11 +173,13 @@ Common to both:
 - Warn/alarm zones are shaded on every chart; the panel border and read-out
   recolour with state (green OK, amber warning, red alarm).
 - A **banner** across the top names the zones currently in ALARM (it flashes in
-  the desktop UI).
+  the desktop UI), and a fire ALARM additionally raises a full-screen alert.
 - **Status tiles** give a one-glance value + state per sensor.
 - **Controls**: log in, then **ARM/DISARM** the security system or **Reset** a
-  latched water/motion alarm. `DISARM` is the "someone's cleaning, don't fire the
-  water alarm" switch. Every override is written to the audit log.
+  latched water/fire alarm. `DISARM` is mirrored to the nodes, which silence
+  their local LED/buzzer — the "someone's cleaning, stop the noise" switch. It
+  does **not** clear a server-side latch; that needs an explicit Reset. Every
+  override is written to the audit log.
 - **Event log** shows state transitions, commands, and connection changes.
 - A **CONNECTED / DISCONNECTED** indicator; a dropped link marks sensors
   DISCONNECTED instead of showing stale data as if live.
@@ -189,11 +197,13 @@ nodes with no change:
    per-sensor model using `ZONE_ALIASES` + `FIELD_TO_SENSOR` in `config.py`:
 
    ```json
-   {"zone": "GAL01", "temp": 21.4, "humidity": 50, "light": 300, "state": "OK"}
+   {"zone": "BASE01", "water": 120, "fire": 12, "temp": 21.4, "humidity": 50,
+    "state": "OK"}
    ```
 
-   `GAL01`→`GALLERY`, `BASE01`→`BASEMENT`, `temp`→`TEMP`, `pot`/`fire`→`FIRE`,
-   `water`/`level`→`WATER`, etc. Unmapped fields (e.g. `air`) are ignored. The
+   `BASE01`→`BASEMENT`, `temp`→`TEMP`, `pot`/`fire`→`FIRE`,
+   `water`/`level`→`WATER`, etc. Unmapped fields (e.g. `air`, or a leftover
+   `light`/`motion` from older firmware) are ignored. The
    reply carries the pending command: `{"ok": true, "cmd": "RESET"}` (one of
    `AUTO`/`OFF`/`ARM`/`DISARM`/`RESET`), which the firmware acts on.
 

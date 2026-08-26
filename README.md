@@ -1,8 +1,11 @@
 # MuseumGuard — End-to-End Test Runbook
 
-Environmental & security monitoring: **ESP32 zone nodes (WiFi)** POST sensor
+Environmental & security monitoring: an **ESP32 node (WiFi)** POSTs sensor
 readings to a **dashboard server on the laptop**; the dashboard shows live
-per-zone status and sends override/ARM/DISARM commands back on the POST reply.
+status and sends override/ARM/DISARM commands back on the POST reply.
+
+Four sensors, all in the **Basement** zone: **water level, temperature,
+humidity and fire**.
 
 > **Goal of this doc:** get from cold laptop to a working end-to-end demo as fast
 > as possible tomorrow morning. Follow it top to bottom.
@@ -12,9 +15,11 @@ per-zone status and sends override/ARM/DISARM commands back on the POST reply.
 ## 0. What talks to what
 
 ```
-  ESP32 (Gallery)  ──POST readings──▶  ┐
-  Pico W (Basement water) ─POST──────▶ │  Laptop: dashboard/server.py  ──▶ browser
-                    ◀──cmd on reply───  ┘        (http://<laptop-ip>:8000)
+  ESP32 BASE01 (water, fire, temp, humidity) ──POST readings──▶ ┐
+  Pico W BASE01 (water, optional second node) ─POST──────────▶ │
+                                      ◀────cmd on reply─────── ┘
+                            Laptop: dashboard/server.py  ──▶ browser
+                                    (http://<laptop-ip>:8000)
 ```
 
 - Nodes are HTTP **clients**; the laptop is the **server**. Commands ride back on
@@ -122,10 +127,8 @@ end ("tested with 3 sensors"): it POSTs `water`, `fire`, `temp`, `humidity` as
    WIFI_SSID = "YourHotspotName"
    WIFI_PASS = "YourHotspotPass"
    SERVER = "http://LAPTOP_IP:8000/api/ingest"
-   ZONE = "GAL01"        # ← change to "BASE01" so it maps to BASEMENT
+   ZONE = "BASE01"       # BASE01 → BASEMENT (the only zone there is)
    ```
-   > Note: as shipped `ZONE = "GAL01"`. For the basement water node set it to
-   > `"BASE01"` (→ BASEMENT.WATER on the dashboard).
    > The Pico is **optional** — the ESP32 in 3a already covers basement water.
    > Only run both if you want a second physical node.
 3. Save as `main.py` **onto the Pico**. Reset — the onboard LED settles solid
@@ -139,25 +142,22 @@ end ("tested with 3 sensors"): it POSTs `water`, `fire`, `temp`, `humidity` as
 2. Power the ESP32 and Pico on the same hotspot.
 3. Open `http://LAPTOP_IP:8000` on the laptop (and/or a phone).
 
-Within ~2 s each node's zone tile should go live. Then walk the checklist.
+Within ~2 s the four Basement tiles should go live. Then walk the checklist.
 
 ### Acceptance checklist (from the spec §10)
 
-- [ ] **Live values** — Gallery temp/humidity update on the dashboard within ~2 s.
-- [ ] **Light warning** — cover the LDR → LIGHT tile goes amber/red. *(needs LDR
-      in firmware — see Known gaps.)*
+- [ ] **Live values** — temp/humidity update on the dashboard within ~2 s.
 - [ ] **Water flood** — wet the basement sensor → WATER tile red and **latches**
       (stays red after drying) until an agent Resets it.
-- [ ] **Motion** — ARMED + wave at PIR → MOTION alarm + banner; DISARMED → no
-      alarm. *(needs PIR in firmware — see Known gaps.)*
 - [ ] **Fire alert** — turn the pot past ~70 → a full-screen 🔥 popup appears on
       the dashboard; **Acknowledge & DISARM** clears it and silences the node.
 - [ ] **Login gate** — as `viewer` only, the ARM/Reset controls are refused;
       they unlock after the in-page `guard` login.
 - [ ] **Override round-trip** — log in, hit **Reset** on a latched alarm →
       clears on the dashboard **and** the node's LED/buzzer within ~2 s.
-- [ ] **Disconnect** — power off a node → its zone shows **DISCONNECTED** within
-      ~6 s; the other zone keeps updating.
+- [ ] **Disconnect** — power off the node → all four tiles show **DISCONNECTED**
+      within ~6 s, and the header flips to DISCONNECTED; power it back on and
+      both recover on the next POST.
 - [ ] **Resilience** — unplug one sensor → the node's other readings keep flowing.
 
 ### Verify the command path by hand
@@ -173,11 +173,11 @@ Within ~2 s each node's zone tile should go live. Then walk the checklist.
 ## 5. Known gaps to decide on in the morning
 
 - **Firmware sensor coverage:** `esp32_node.ino` sends **water, fire (pot),
-  temp and humidity** for `BASE01`. **LDR light and PIR motion are not in any
-  firmware yet**, so the two GALLERY tiles for them stay DISCONNECTED. The server
-  already accepts `light`/`motion` fields (see `FIELD_TO_SENSOR` in
-  `dashboard/config.py`) — the moment a firmware sends them, the tiles light up.
-  Decide whether the Gallery node is in scope for the demo at all.
+  temp and humidity** for `BASE01` — exactly the four the dashboard shows, so
+  there are no dead tiles. The old Gallery zone (LDR light + PIR motion) is
+  **gone**: no firmware ever sent it. To bring it back, add the `SensorDef`s and
+  a `ZONE_ALIASES` entry in `dashboard/config.py` plus the two `FIELD_TO_SENSOR`
+  lines — nothing else in the dashboard is zone-aware.
 - **Fire is a potentiometer stand-in**, not a real flame/smoke sensor: a 0..100
   index, warn at 50, alarm (latched) at 70. Swap the sensor and the thresholds in
   `BASEMENT.FIRE` together.
@@ -198,7 +198,7 @@ Within ~2 s each node's zone tile should go live. Then walk the checklist.
 | Can't get past the sign-in page | wrong tier | that page wants `viewer`; `guard` works there too |
 | Controls do nothing | logged in as `viewer` only | use **Agent login** with the `guard` creds |
 | Locked out after retries | per-IP rate limit (5 fails) | wait 5 min, or restart the server |
-| Zone name wrong on dashboard | node `ZONE` id | `GAL01`→GALLERY, `BASE01`→BASEMENT (see `dashboard/config.py` `ZONE_ALIASES`) |
+| Node POSTs 200 but no tile appears | node `ZONE` id is not `BASE01` | only `BASE01`/`BASEMENT` map to a zone now (see `dashboard/config.py` `ZONE_ALIASES`); anything else is accepted and dropped |
 
 ---
 

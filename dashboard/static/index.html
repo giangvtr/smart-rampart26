@@ -819,7 +819,10 @@ class Chart {
 const wsRect = () => $("#workspace").getBoundingClientRect();
 const GAP = 8, MIN_W = 200, MIN_H = 120;
 const EDGE = 30;             // px from a workspace border that arms a snap
-const LS_KEY = "museumguard.layout.v1";
+// v2: the sensor set changed (Gallery dropped), so v1 layouts would restore
+// the surviving windows into their old 8-window slots -- leaving the top half
+// of the workspace empty. Bumping the key retiles everyone once.
+const LS_KEY = "museumguard.layout.v2";
 let layoutCustomised = false;
 
 class Win {
@@ -1067,6 +1070,9 @@ function defaultLayout(){
     syncToggle(w.key, true);
   }
   layoutCustomised = false;
+  // Two columns over the four basement sensors = a 2x2 that exactly fills the
+  // workspace. tile() falls back to one column if the window is too narrow for
+  // two at MIN_W, and a phone gets the stacked column instead (body.stacked).
   tile(2);
 }
 
@@ -1130,9 +1136,15 @@ function markDirty(key){ const c = charts.get(key); if (c) c.dirty = true; }
 // ---------------------------------------------------------------------------
 // Build the UI from the bootstrap payload
 // ---------------------------------------------------------------------------
+// With a single zone the "BASEMENT · " prefix on every label is noise; it comes
+// back on its own if a second zone is ever added to config.SENSORS.
+let MULTI_ZONE = false;
+const zonePrefix = d => MULTI_ZONE ? `${d.zone} · ` : "";
+
 function build(){
   $("#subtitle").textContent = "Environmental & Security Monitoring";
   COLORS = BOOT.colors; SCALES = BOOT.timeScales;
+  MULTI_ZONE = new Set(BOOT.sensors.map(d => d.zone)).size > 1;
 
   const ws = $("#workspace"), tiles = $("#tiles"), toggles = $("#toggles"),
         resets = $("#resets"), taskbar = $("#taskbar"), cards = $("#cards");
@@ -1141,7 +1153,7 @@ function build(){
     // ---- status tile ----
     const tile = document.createElement("div");
     tile.className = "tile"; tile.id = "tile-" + d.key;
-    tile.innerHTML = `<span class="nm">${d.zone} · ${d.label}</span><span class="vl">--</span>`;
+    tile.innerHTML = `<span class="nm">${zonePrefix(d)}${d.label}</span><span class="vl">--</span>`;
     tiles.appendChild(tile);
 
     // ---- simple-view box ----
@@ -1157,7 +1169,7 @@ function build(){
     // ---- show/hide toggle ----
     const lab = document.createElement("label");
     lab.className = "tog";
-    lab.innerHTML = `<input type="checkbox" data-key="${d.key}" checked><span>${d.zone} · ${d.label}</span>`;
+    lab.innerHTML = `<input type="checkbox" data-key="${d.key}" checked><span>${zonePrefix(d)}${d.label}</span>`;
     lab.querySelector("input").addEventListener("change", e => {
       const w = wins.get(d.key);
       if (e.target.checked) w.reopen(); else w.close();
@@ -1167,7 +1179,7 @@ function build(){
     // ---- reset button for latching sensors ----
     if (d.latched){
       const b = document.createElement("button");
-      b.className = "ctl"; b.textContent = `Reset ${d.zone} · ${d.label}`;
+      b.className = "ctl"; b.textContent = `Reset ${zonePrefix(d)}${d.label}`;
       b.dataset.zone=d.zone; b.dataset.sensor=d.sensor; b.dataset.action="RESET";
       b.style.width="100%"; b.style.marginBottom="6px";
       resets.appendChild(b);
@@ -1176,7 +1188,7 @@ function build(){
     // ---- taskbar button ----
     const tb = document.createElement("button");
     tb.className = "tb"; tb.dataset.key = d.key;
-    tb.innerHTML = `<span class="tdot"></span><span>${d.zone} · ${d.label}</span>`;
+    tb.innerHTML = `<span class="tdot"></span><span>${zonePrefix(d)}${d.label}</span>`;
     taskbar.appendChild(tb);
 
     // ---- window ----
@@ -1184,7 +1196,7 @@ function build(){
     el.className = "win"; el.id = "win-" + d.key;
     el.innerHTML = `
       <div class="win-head">
-        <span class="title" title="${d.zone} · ${d.label}"><span class="zn">${d.zone} · </span>${d.label}</span>
+        <span class="title" title="${zonePrefix(d)}${d.label}"><span class="zn">${zonePrefix(d)}</span>${d.label}</span>
         <span class="reading">--</span>
         <select class="scale" title="Time window">${SCALES.map((s,i)=>
           `<option value="${i}"${i===BOOT.defaultScaleIndex?" selected":""}>${s[0]}</option>`).join("")}</select>
