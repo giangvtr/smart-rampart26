@@ -2,8 +2,9 @@
 
 Monitoring station for the MuseumGuard sensor rig (temp/humidity, light, water
 level, motion across a Gallery + Basement zone). Live charts in floating,
-snappable windows, colour-coded alarm states, a flashing alarm banner,
-login-gated alarm override/disarm, and zero-install local logging.
+snappable windows — or a phone-friendly **Simple** board of colour-coded value
+boxes — colour-coded alarm states, a flashing alarm banner, login-gated alarm
+override/disarm, and zero-install local logging.
 
 Runs today against a built-in **simulator** (no hardware needed); swaps to a real
 Arduino over USB/Bluetooth by changing one line.
@@ -12,7 +13,8 @@ Arduino over USB/Bluetooth by changing one line.
 
 Working end to end, on simulated data:
 
-- ✅ Web UI (stdlib server + SSE, canvas charts, floating-window workspace).
+- ✅ Web UI (stdlib server + SSE, canvas charts, floating-window workspace, plus
+  a simple value-box view that works on a phone).
 - ✅ Desktop UI (PySide6 + pyqtgraph docks) — feature-equivalent.
 - ✅ Simulator with latching water/motion alarms that honour ARM/DISARM/RESET.
 - ✅ SQLite + daily CSV logging, audit trail for logins and overrides.
@@ -37,6 +39,7 @@ Pick whichever you prefer — they share the same engine and the same database:
 | Dependencies | **none** (stdlib only) | PySide6 + pyqtgraph |
 | Graph controls | wheel-zoom, drag-pan, live/pause, hover readout | pan/zoom via pyqtgraph |
 | Panels | floating windows: move, resize, edge-snap, minimise/maximise/close, taskbar, layout remembered | docks: drag/float/resize/close |
+| Simple view | value-only boxes, mobile-ready | — |
 
 Shared by both: `config.py`, `core.py`, `transports.py`, `storage.py`,
 `security.py`, `anomaly.py`. Only the presentation layer differs.
@@ -100,6 +103,17 @@ locks that IP out for 5 minutes (`security.RateLimiter`).
 **double-click** or the **● Live** button to jump back to now. Hovering shows a
 crosshair with the exact value and timestamp. Each window's title bar carries a
 time-scale selector (30 s / 2 min / 5 min / 30 min / All).
+
+**Two views (web):** the **Graphs / Simple** switch in the top bar flips between
+the floating-window workspace and a **Simple** board — one box per sensor showing
+just its current value, filled with that sensor's state colour (green OK, amber
+warning, red alarm, grey disconnected; alarming boxes pulse). Handy for a wall
+display or a quick glance, and it's what phones get. The choice is remembered.
+
+**On a phone**, the sidebar becomes a ☰ drawer that slides over the content
+instead of eating half the screen (tap the dimmed area to close it), the boxes
+reflow to two columns, and the Simple view is the default — the floating windows
+are still reachable through the switch, they're just not much use at that size.
 
 **Windows (web):** every sensor is a floating window in a desktop-style
 workspace.
