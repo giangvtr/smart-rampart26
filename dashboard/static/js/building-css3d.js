@@ -79,6 +79,21 @@ function plane(parent, cls, {x = 0, y = 0, z = 0, len, h, axis = "x"}){
   return p;
 }
 
+/* A horizontal slab: ONE div. A plinth is 30-40 cm tall and seen from above --
+ * its four sides are three or four extra transformed planes each for almost no
+ * pixels, and at ~50 exhibits that is the difference between a smooth scene and
+ * a stuttering one. `x,y` is the centre of the footprint. */
+function slab(parent, cls, {x, y, z = 0, w, d, colour}){
+  const p = el(cls, parent);
+  if (colour) p.style.setProperty("--f", rgb(colour));
+  p.style.left = ((x - w / 2) * PX_PER_M) + "px";
+  p.style.top  = ((y - d / 2) * PX_PER_M) + "px";
+  p.style.width  = (w * PX_PER_M) + "px";
+  p.style.height = (d * PX_PER_M) + "px";
+  p.style.transform = `translateZ(${z * VPM}px)`;
+  return p;
+}
+
 /* A box: four sides plus a lid. `x,y` is the CENTRE of the footprint, matching
  * the fixture format building.py emits. */
 function box(parent, cls, {x, y, z = 0, w, d, h, colour}){
@@ -195,17 +210,26 @@ const CSS = `
 #b3d .room:hover .plate{background:rgba(var(--c),.26); border-color:rgba(var(--c),.95)}
 #b3d .room:hover .wall{background:linear-gradient(rgba(var(--c),.34), rgba(var(--c),.05))}
 
-/* alarm rooms throb so a red room is findable without hunting */
-#b3d .room.alarm .plate{animation:b3dpulse 1.05s ease-in-out infinite}
-#b3d .room.alarm .wall{animation:b3dwall 1.05s ease-in-out infinite}
-@keyframes b3dpulse{
-  0%,100%{background:rgba(var(--c),.16); box-shadow:inset 0 0 30px rgba(var(--c),.25)}
-  50%    {background:rgba(var(--c),.42); box-shadow:inset 0 0 62px rgba(var(--c),.75)}
+/* Alarm rooms blink so a red room is findable without hunting.
+ *
+ * It BLINKS rather than throbs, and that is a performance decision. Nothing
+ * animates cheaply inside a preserve-3d subtree: Chrome cannot promote an
+ * element to its own compositor layer without breaking the 3D depth sort, so
+ * even an opacity animation repaints -- measured at 60 -> 25 fps for a single
+ * alarming room, and 14 fps with twelve. A "steps(1, end)" timing turns that
+ * into two repaints a second instead of sixty, which costs nothing and reads
+ * as an alarm just as well. The header banner has always blinked for the same
+ * reason; this matches it.
+ */
+#b3d .glow{
+  /* invisible unless the room is alarming -- the keyframes own both levels */
+  position:absolute; inset:0; pointer-events:none; opacity:0;
+  background:rgba(var(--c),.55);
+  box-shadow:inset 0 0 60px rgba(var(--c),.85);
 }
-@keyframes b3dwall{
-  0%,100%{background:linear-gradient(rgba(var(--c),.22), rgba(var(--c),.02))}
-  50%    {background:linear-gradient(rgba(var(--c),.50), rgba(var(--c),.10))}
-}
+#b3d .room.alarm .glow{animation:b3dglow 1.1s steps(1, end) infinite}
+#b3d .room.alarm .wall{background:linear-gradient(rgba(var(--c),.46), rgba(var(--c),.08))}
+@keyframes b3dglow{ 0%,100%{opacity:.18} 50%{opacity:1} }
 
 /* ---- furniture ---- */
 #b3d .vol{position:absolute; transform-style:preserve-3d; pointer-events:none}
@@ -218,6 +242,11 @@ const CSS = `
   position:absolute; inset:0;
   background:rgba(var(--f),.34); border:1px solid rgba(var(--f),.70);
 }
+/* a plinth, drawn as its top face only */
+#b3d .pplate{
+  position:absolute; pointer-events:none;
+  background:rgba(var(--f),.52); border:1px solid rgba(var(--f),.85);
+}
 /* display cases are glass: barely-there fill, bright edges */
 #b3d .case .side{background:linear-gradient(rgba(var(--f),.13), rgba(var(--f),.05));
   border-top:1px solid rgba(var(--f),.60); border-bottom:1px solid rgba(var(--f),.60)}
@@ -227,13 +256,14 @@ const CSS = `
 #b3d .col .side{background:linear-gradient(rgba(var(--f),.52), rgba(var(--f),.22))}
 
 /* An exhibit: two crossed silhouettes, so it reads as an object from any orbit
-   angle. The clip-path comes from POSES, set per element. drop-shadow traces
-   the CLIPPED outline (a border would not -- it gets clipped away too), which
-   is what stops a statue dissolving into the glass behind it. */
+   angle. The clip-path comes from POSES, set per element.
+   NB: no filter here. drop-shadow would trace the clipped outline nicely, but
+   it forces every silhouette onto its own composited layer -- measured at a
+   third of the frame budget across ~50 exhibits. A near-opaque fill separates
+   them from the glass behind just as well and costs nothing. */
 #b3d .fig{
   position:absolute; pointer-events:none;
-  background:linear-gradient(rgba(var(--f),.92), rgba(var(--f),.52));
-  filter:drop-shadow(0 0 2px rgba(var(--f),.55));
+  background:linear-gradient(rgba(var(--f),.98), rgba(var(--f),.66));
 }
 
 /* ---- mounted on a wall ---- */
@@ -440,6 +470,7 @@ function addRoom(floorEl, room){
   rEl.style.transform = `translateZ(${ROOM_Z}px)`;
 
   el("plate", rEl);
+  el("glow", rEl);          // the alarm throb; see the note on @keyframes b3dglow
 
   // four glass walls standing on the plate edges, keyed so wall-mounted
   // fixtures can be dropped straight into the right one
@@ -555,8 +586,8 @@ function addFixture(rEl, walls, fx){
       if (!fx.holds) return;
       const base = fx.h * 0.16;
       const inner = Math.min(fx.w, fx.d) * 0.42;
-      box(rEl, "plinth", {x: fx.x, y: fx.y, w: inner * 1.5, d: inner * 1.5,
-                          h: base, colour: "#8d9aa8"});
+      slab(rEl, "pplate", {x: fx.x, y: fx.y, z: base,
+                           w: inner * 1.5, d: inner * 1.5, colour: "#8d9aa8"});
       if (fx.holds === "blade"){                // a sword lies flat, not stands
         box(rEl, "blk", {x: fx.x, y: fx.y, z: base, w: fx.w * 0.7,
                          d: fx.d * 0.12, h: fx.h * 0.08, colour: "#c8d4e2"});
@@ -570,8 +601,8 @@ function addFixture(rEl, walls, fx){
     // ---- an exhibit standing on the floor ----
     case "figure": {
       const base = fx.h * 0.17;
-      box(rEl, "plinth", {x: fx.x, y: fx.y, w: fx.w, d: fx.d, h: base,
-                          colour: "#8d9aa8"});
+      slab(rEl, "pplate", {x: fx.x, y: fx.y, z: base,
+                           w: fx.w, d: fx.d, colour: "#8d9aa8"});
       figure(rEl, {x: fx.x, y: fx.y, z: base, w: fx.w * 0.86,
                    h: fx.h - base, pose: fx.pose, colour: fx.c});
       return;
@@ -591,7 +622,7 @@ function showTip(room){
   const tip = document.getElementById("bTip");
   const rows = MG.sensorsIn(room.id).map(s =>
     `<div class="r"><span>${s.label}</span>` +
-    `<b style="color:${MG.color(s.state)}">${s.value == null ? "--" : s.value} ${s.unit}</b></div>`
+    `<b style="color:${MG.color(s.state)}">${MG.fmt(s)}</b></div>`
   ).join("");
   tip.innerHTML = `<div class="t">${room.name}</div>${rows}` +
     (room.live ? `<div class="live">● live hardware — click to open</div>`

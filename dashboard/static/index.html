@@ -420,8 +420,17 @@ const $ = s => document.querySelector(s);
 
 // The bridge the 3D renderer sees. Declared up here (before anything runs) so
 // the renderer script can register itself whenever it finishes loading.
+/* A reading, formatted for a human. On/off sensors read Yes/No: "1 bool" makes
+   the reader translate before they can act on it. */
+function fmtValue(def, value){
+  if (value == null) return "--";
+  if (def && def.unit === "bool") return value >= 0.5 ? "Yes" : "No";
+  return def && def.unit ? `${value} ${def.unit}` : String(value);
+}
+
 window.MG = {
   rooms: [], building: null,
+  fmt: s => fmtValue(s, s.value),
   roomState: id => roomState(id),
   sensorsIn: id => ((ROOMS_BY_ID.get(id) || {}).keys || [])
                      .map(k => ({...DEFS.get(k), ...STATES.get(k)})),
@@ -681,7 +690,7 @@ class Chart {
         this.tip.style.display="block";
         const hit = SHOW_ANOMS ? this.anomalyAt(this.t[idx]) : null;
         this.tip.innerHTML =
-          `${this.v[idx]} ${d.unit} · ${fmtClock(this.t[idx])}` +
+          `${fmtValue(d, this.v[idx])} · ${fmtClock(this.t[idx])}` +
           (hit ? `<div class="tipa" style="color:${SEV_STYLE[hit.severity].line}">`
                + `${hit.kindLabel} · ${hit.severity} · ${hit.score}σ</div>` : "");
         this.tip.style.left = Math.min(w-this.tip.offsetWidth-6, hx+10) + "px";
@@ -1164,11 +1173,13 @@ function openRoom(roomId){
     const ch = charts.get(rec.key);
     if (ch) ch.setAnomaly(rec);
   }
+  refreshBanner();          // the banner is now scoped to this room
   setHash(`#/room/${roomId}`);
 }
 
 function showBuilding(){
   CURRENT_ROOM = null;
+  refreshBanner();          // ...and building-wide again on the way out
   document.body.classList.add("view-building");
   $("#subtitle").textContent = "Building overview";
   Renderers.start();
@@ -1212,11 +1223,11 @@ function setSensor(key, value, state){
   const el = document.getElementById("win-"+key);
   el.style.borderTopColor = col;
   const rd = el.querySelector(".reading");
-  rd.textContent = `${value} ${ch.def.unit}`; rd.style.color = col;
+  rd.textContent = fmtValue(ch.def, value); rd.style.color = col;
   const tile = document.getElementById("tile-"+key);
   tile.style.borderLeftColor = col;
   const vl = tile.querySelector(".vl");
-  vl.textContent = `${value} · ${state}`; vl.style.color = col;
+  vl.textContent = `${fmtValue(ch.def, value)} · ${state}`; vl.style.color = col;
   const dot = document.querySelector(`.tb[data-key="${key}"] .tdot`);
   if (dot) dot.style.background = col;
 }
@@ -1224,15 +1235,22 @@ function setSensor(key, value, state){
 let SYSTEM_ARMED = true;
 let _bannerKey = null;
 function refreshBanner(){
-  // Building-wide, from STATES rather than `charts`: an alarm two floors up
-  // must still reach the banner while you are looking at one room.
+  // Read from STATES, not `charts`: `charts` only holds the open room.
+  //
+  // In the building view the banner is building-wide -- an alarm two floors up
+  // must still reach you. Inside a room it is scoped to that room: while
+  // someone is being walked through one dashboard, a simulated alarm in a
+  // gallery they are not looking at is an interruption, not information.
   const rooms = new Set();
-  for (const [key, s] of STATES){
-    if (s.state === "ALARM"){ const r = roomOf(key); if (r) rooms.add(r); }
+  for (const [key, st] of STATES){
+    if (st.state !== "ALARM") continue;
+    const r = roomOf(key);
+    if (!r || (CURRENT_ROOM && r !== CURRENT_ROOM)) continue;
+    rooms.add(r);
   }
   const names = [...rooms].sort()
     .map(r => (ROOMS_BY_ID.get(r) || {}).name || r).join(", ");
-  const key = (SYSTEM_ARMED ? "A:" : "D:") + names;
+  const key = (SYSTEM_ARMED ? "A:" : "D:") + (CURRENT_ROOM || "*") + ":" + names;
   if (key === _bannerKey) return;      // only touch the DOM when it changes
   _bannerKey = key;
   const b = $("#banner");

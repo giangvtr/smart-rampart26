@@ -6,7 +6,7 @@ room. One room — **B1 · Archive & Vault** — is the real hardware rig. The o
 11 are simulated, so the dashboard can be shown at building scale.
 
 It is drawn with **CSS 3D transforms and nothing else**: no WebGL, no npm, no
-CDN, no build step. The whole view is one 727-line file plus the geometry the
+CDN, no build step. The whole view is one 758-line file plus the geometry the
 server already sends.
 
 ## Getting around
@@ -18,6 +18,12 @@ server already sends.
 | **Isolate a floor** | the floor tabs; the other storeys drop to 7 % opacity **and stop taking clicks**, which is how you reach a basement room hidden under the ground floor |
 | **Open a room** | click it — or deep-link straight to `#/room/F1_JEWELS` |
 | **Peek without opening** | hover for live values per sensor |
+
+The alarm banner follows where you are: building-wide in the building view, and
+**scoped to the open room once you are inside one**. Walking someone through a
+dashboard should not be interrupted by a simulated alarm in a gallery they are
+not looking at. The event log and the anomaly pane stay building-wide — they are
+a record, not an interruption.
 
 Navigation is hash-based, so moving between the building and a room never
 reloads the page: the single SSE connection and the login session both survive.
@@ -50,9 +56,14 @@ loading bay.
 ## What you are looking at
 
 **Rooms** are glass boxes coloured by their worst sensor state — green / amber /
-red — with a pulsing fill when something is in ALARM. A row of dots along the
-south edge carries one dot per sensor in its *own* state, so you can see *which*
-sensor is hot before opening anything. The live room wears a blue pip.
+red — and an alarming room blinks. A row of dots along the south edge carries
+one dot per sensor in its *own* state, so you can see *which* sensor is hot
+before opening anything. The live room wears a blue pip.
+
+It *blinks* rather than throbs for a reason worth knowing: nothing animates
+cheaply inside a `preserve-3d` subtree, because Chrome cannot promote an element
+to its own compositor layer without breaking the 3D depth sort, so a smooth
+pulse repaints the whole scene every frame. The numbers are below.
 
 **The exhibits** are what make a room legible as a room, and each is drawn as
 the thing it claims to be. An exhibit standing on the floor is two crossed
@@ -128,20 +139,43 @@ changes anywhere else.
 
 ## Why CSS 3D and not WebGL
 
-Measured on this machine, 12 rooms / 54 sensors / 133 exhibits, Chrome:
+Measured on this machine, 12 rooms / 54 sensors / 91 exhibits, Chrome:
 
 | | |
 |---|---|
 | Bytes downloaded | **0** |
-| Scene | 1105 DOM elements (98 of them exhibit silhouettes) |
-| `update()` | **0.009 ms** |
-| `update()` + a full camera re-apply | **0.076 ms** — 0.5 % of a 60 fps frame |
+| Scene | 687 DOM elements (68 of them exhibit silhouettes) |
+| `update()` | **0.021 ms** |
+| `update()` + a full camera re-apply | **0.108 ms** — 0.6 % of a 60 fps frame |
+
+Those cover the JavaScript. The frame rate is set by compositing, and that is
+where the scene was actually being lost. Measured in the same headless Chrome,
+which has no GPU and rasterises in software — so read the *ratios*, not the
+absolute numbers:
+
+| | idle | 1 room alarming | 12 alarming |
+|---|---|---|---|
+| pulsing `background` + `box-shadow`, 133 exhibits, `drop-shadow` on figures | 60 | **9** | — |
+| after: blink via stepped opacity, 91 exhibits, no filter | 58 | **55** | 46 |
+
+Three separate things were costing frames, in descending order:
+
+1. **The alarm pulse animated paint properties.** `background` and `box-shadow`
+   repaint the element every frame, and inside `preserve-3d` that drags the
+   whole scene with it: 60 → 25 fps for a *single* alarming room. Now a
+   `steps(1, end)` blink — two repaints a second instead of sixty.
+2. **`drop-shadow` on every exhibit silhouette** cost roughly a third of the
+   frame budget, to draw a rim light. A near-opaque fill separates them from the
+   glass just as well and costs nothing.
+3. **Sheer volume count.** Each box is five transformed planes. Exhibit counts
+   came down by a third, and plinths — 30 cm tall and seen from above — became a
+   single top-face slab instead of a five-plane box.
 
 **Read those honestly.** `update()` only mutates styles; the projection and
 compositing happen off the main thread, so this is the cost of *telling the
 browser what changed*, not the cost of drawing the building. The real ceiling
-here is compositor work on ~1100 transformed planes, which these numbers do not
-capture.
+here is compositor work on ~690 transformed planes, which the frame-rate table
+above captures instead.
 
 That ceiling is still a long way off at this scale, and CSS 3D buys things a
 WebGL renderer would have to reimplement: rooms are `<div>`s, so hit-testing,
@@ -166,6 +200,8 @@ bring it back.
   precisely so the basement stays reachable.
 - **Room labels on the lower storeys are dimmed** by the translucent slabs above
   them. Hovering names the room regardless, and isolating a floor clears it.
+- **Nothing in the scene can be animated smoothly.** Any per-frame animation
+  inside the 3D subtree repaints it, so effects here are stepped, not eased.
 
 ## Notes on the simulation
 

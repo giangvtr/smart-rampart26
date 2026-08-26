@@ -118,6 +118,19 @@ SENSORS_BY_KEY = {s.key: s for s in SENSORS}
 ZONES = sorted({s.zone for s in SENSORS})
 
 
+def fmt_value(sdef: "SensorDef", value: float) -> str:
+    """A reading, formatted for a human.
+
+    On/off sensors read Yes/No -- "1 bool" makes the reader translate before
+    they can act on it. The web UI has the same rule in fmtValue().
+    """
+    if value is None:
+        return "--"
+    if sdef.unit == "bool":
+        return "Yes" if value >= 0.5 else "No"
+    return f"{value:g} {sdef.unit}"
+
+
 def sensors_in_room(room_id: str) -> list[SensorDef]:
     return [s for s in SENSORS if s.room == room_id]
 

@@ -295,7 +295,13 @@ def _door(room):
 
 
 def furnish(room) -> list[dict]:
-    """Deterministic per room -- the same museum every reload."""
+    """Deterministic per room -- the same museum every reload.
+
+    Counts are deliberately sparse. Every volume here is several transformed
+    planes in the browser, and past roughly one exhibit per 25 m2 the scene
+    stops holding 60 fps without reading any more like a museum -- a gallery
+    says "gallery" with four statues as clearly as with nine.
+    """
     rng = random.Random(room.id)
     D, F = room.h, FX_COLORS
     s = room.style
@@ -303,22 +309,22 @@ def furnish(room) -> list[dict]:
 
     # ---- galleries ------------------------------------------------------
     if s == "paintings":
-        f += _wall(rng, room, "nsew", 3.4, 1.5, 1.5)
-        f += _row(room, 2, D * 0.46, 2.4, 1.3, 1.5, F["glass"], "case",
+        f += _wall(rng, room, "nsw", 5.4, 1.5, 1.5)
+        f += _row(room, 1, D * 0.46, 2.4, 1.3, 1.5, F["glass"], "case",
                   holds="bust", inset=6.0)
-        f += _row(room, 3, D * 0.78, 2.4, 0.5, 0.45, F["wood"])
+        f += _row(room, 2, D * 0.78, 2.4, 0.5, 0.45, F["wood"])
 
     elif s == "egypt":
-        f += _wall(rng, room, "ns", 4.6, 1.5, 1.8, kind="relief", colour=F["stone"])
-        f += _figures(room, 3, D * 0.28, 2.8, "statue", F["stone"], inset=3.5)
+        f += _wall(rng, room, "n", 5.6, 1.5, 1.8, kind="relief", colour=F["stone"])
+        f += _figures(room, 2, D * 0.28, 2.8, "statue", F["stone"], inset=3.5)
         # a sarcophagus down the middle, then vitrines along the back
         f += [{"t": "block", "x": round(room.w / 2, 2), "y": round(D * 0.54, 2),
                "w": 3.4, "d": 1.3, "h": 0.9, "c": F["bronze"]}]
-        f += _row(room, 3, D * 0.80, 2.2, 1.3, 1.6, F["glass"], "case", holds="vase")
+        f += _row(room, 2, D * 0.80, 2.2, 1.3, 1.6, F["glass"], "case", holds="vase")
 
     elif s == "sculpture":
-        f += _figures(room, 4, D * 0.30, 2.9, "statue", F["stone"], inset=3.0, w=1.5)
-        f += _figures(room, 3, D * 0.68, 2.2, "torso", F["stone"], inset=5.0, w=1.4)
+        f += _figures(room, 3, D * 0.30, 2.9, "statue", F["stone"], inset=3.0, w=1.5)
+        f += _figures(room, 2, D * 0.68, 2.2, "torso", F["stone"], inset=5.0, w=1.4)
         f += [{"t": "column", "x": round(room.w * (0.25 + 0.5 * i), 2),
                "y": round(D * 0.5, 2), "w": 1.0, "d": 1.0, "h": WALL_H,
                "c": F["stone"]} for i in range(2)]
@@ -326,42 +332,42 @@ def furnish(room) -> list[dict]:
     elif s == "casts":
         # a cast court is wall-to-wall plaster copies, floor to ceiling
         f += _figures(room, 3, D * 0.30, 3.4, "statue", F["stone"], inset=2.5, w=1.6)
-        f += _figures(room, 3, D * 0.72, 2.0, "bust", F["stone"], inset=3.0, w=1.1)
+        f += _figures(room, 2, D * 0.72, 2.0, "bust", F["stone"], inset=3.0, w=1.1)
 
     elif s == "antiquities":
-        f += _wall(rng, room, "n", 4.2, 1.5, 1.6, kind="relief", colour=F["stone"])
-        f += _figures(room, 3, D * 0.28, 2.4, "torso", F["stone"], inset=3.0)
-        f += _row(room, 3, D * 0.62, 2.2, 1.3, 1.5, F["glass"], "case", holds="vase")
-        f += _figures(room, 2, D * 0.86, 1.9, "bust", F["stone"], inset=5.0, w=1.0)
+        f += _wall(rng, room, "n", 6.5, 1.5, 1.6, kind="relief", colour=F["stone"])
+        f += _figures(room, 2, D * 0.28, 2.4, "torso", F["stone"], inset=3.0)
+        f += _row(room, 2, D * 0.62, 2.2, 1.3, 1.5, F["glass"], "case", holds="vase")
+        f += _figures(room, 1, D * 0.86, 1.9, "bust", F["stone"], inset=5.0, w=1.0)
 
     elif s == "armoury":
-        f += _figures(room, 3, D * 0.30, 2.5, "armour", F["steel"], inset=2.5, w=1.2)
-        # low weapon cases, and shields hung on the back wall
-        f += _row(room, 2, D * 0.66, 3.2, 1.1, 1.1, F["glass"], "case", holds="blade")
-        f += _wall(rng, room, "n", 3.0, 1.9, 1.1, kind="relief", colour=F["steel"],
+        f += _figures(room, 2, D * 0.30, 2.5, "armour", F["steel"], inset=2.5, w=1.2)
+        # a low weapon case, and shields hung on the back wall
+        f += _row(room, 1, D * 0.66, 3.2, 1.1, 1.1, F["glass"], "case", holds="blade")
+        f += _wall(rng, room, "n", 4.6, 1.9, 1.1, kind="relief", colour=F["steel"],
                    wmin=0.9, wmax=1.3)
 
     elif s == "vault":
         # small room, high value: cases in a ring around one hero case
-        f += _row(room, 3, D * 0.28, 2.0, 1.5, 1.4, F["glass"], "case",
+        f += _row(room, 2, D * 0.28, 2.0, 1.5, 1.4, F["glass"], "case",
                   holds="gem", inset=2.6)
-        f += _row(room, 3, D * 0.80, 2.0, 1.5, 1.4, F["glass"], "case",
+        f += _row(room, 2, D * 0.80, 2.0, 1.5, 1.4, F["glass"], "case",
                   holds="gem", inset=2.6)
         f += [{"t": "case", "x": round(room.w / 2, 2), "y": round(D / 2, 2),
                "w": 3.0, "d": 3.0, "h": 2.0, "c": F["glass"], "holds": "crown"}]
-        f += _wall(rng, room, "n", 5.0, 1.7, 1.2)
+        f += _wall(rng, room, "n", 7.0, 1.7, 1.2)
 
     elif s == "textiles":
         # hangings are tall and narrow; mannequins wear the dressed pieces
-        f += _wall(rng, room, "nsw", 3.2, 0.9, 2.4, kind="hanging",
+        f += _wall(rng, room, "nw", 4.8, 0.9, 2.4, kind="hanging",
                    colour=F["fabric"], wmin=1.2, wmax=1.8)
-        f += _figures(room, 3, D * 0.42, 2.0, "mannequin", F["fabric"], inset=3.0, w=1.0)
-        f += _row(room, 2, D * 0.78, 3.0, 1.2, 1.1, F["glass"], "case", holds="blade")
+        f += _figures(room, 2, D * 0.42, 2.0, "mannequin", F["fabric"], inset=3.0, w=1.0)
+        f += _row(room, 1, D * 0.78, 3.0, 1.2, 1.1, F["glass"], "case", holds="blade")
 
     elif s == "ceramics":
-        f += _figures(room, 4, D * 0.30, 1.9, "vase", F["clay"], inset=2.5, w=1.0)
-        f += _row(room, 3, D * 0.66, 2.2, 1.3, 1.6, F["glass"], "case", holds="vase")
-        f += _wall(rng, room, "n", 2.6, 2.0, 0.9, kind="relief", colour=F["clay"],
+        f += _figures(room, 3, D * 0.30, 1.9, "vase", F["clay"], inset=2.5, w=1.0)
+        f += _row(room, 2, D * 0.66, 2.2, 1.3, 1.6, F["glass"], "case", holds="vase")
+        f += _wall(rng, room, "n", 5.0, 2.0, 0.9, kind="relief", colour=F["clay"],
                    wmin=0.8, wmax=1.1)
 
     # ---- the two rooms that are not galleries, plus back-of-house -------
@@ -374,15 +380,15 @@ def furnish(room) -> list[dict]:
         f += _row(room, 2, D * 0.86, 3.0, 0.6, 0.45, F["wood"], inset=3.5)
 
     elif s == "archive":
-        f += [r for j in range(3)
-              for r in _row(room, 2, 2.0 + (D - 4.0) * (j + 0.5) / 3,
+        f += [r for j in range(2)
+              for r in _row(room, 2, 2.5 + (D - 5.0) * (j + 0.5) / 2,
                             6.0, 0.9, 2.6, F["steel"])]           # shelving runs
         f += [{"t": "block", "x": round(room.w * 0.5, 2), "y": round(D * 0.5, 2),
                "w": 2.0, "d": 1.0, "h": 0.8, "c": F["wood"]}]     # work table
 
     elif s == "loading":
         f += [r for j in range(2)
-              for r in _row(room, 3, 3.0 + (D - 6.0) * (j + 0.5) / 2,
+              for r in _row(room, 2, 3.0 + (D - 6.0) * (j + 0.5) / 2,
                             2.2, 2.2, 1.8, F["crate"])]
         # the roller shutter the DOOR sensor watches
         f += [{"t": "door", "wall": "w", "at": round(D / 2, 2),
