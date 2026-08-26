@@ -1,7 +1,5 @@
-# Desktop UI (app.py) only. The WEB UI (server.py) needs NOTHING beyond the
-# Python standard library -- just run: python server.py
-PySide6>=6.6
-pyqtgraph>=0.13
+# The dashboard (server.py + static/) needs NOTHING beyond the Python standard
+# library -- just run: python server.py
 
 # Only needed when talking to real hardware over USB / Bluetooth-Classic
 # (SerialSource); the simulator does not need it.

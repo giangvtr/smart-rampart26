@@ -1,22 +1,21 @@
 """
-MuseumGuard dashboard -- web frontend (alternative to the Qt desktop app).
+MuseumGuard dashboard -- web frontend.
 
-Same features, nicer UI, better graph controls. Uses **only the Python standard
-library** on the server side: no Flask, no FastAPI, no npm, no CDN. The browser
-page (static/index.html) draws its charts on a plain <canvas> -- no charting
-library either, so the demo works with no internet at the venue.
+Uses **only the Python standard library** on the server side: no Flask, no
+FastAPI, no npm, no CDN. The browser page (static/index.html) draws its charts
+on a plain <canvas> -- no charting library either, so the demo works with no
+internet at the venue.
 
-Both frontends share the exact same engine; only the presentation differs:
+The presentation layer sits on top of a transport-agnostic engine:
 
-    config.py / core.py / transports.py / storage.py / security.py   <- shared
-        app.py    + panels.py            -> PySide6 desktop UI
-        server.py + static/index.html    -> browser UI   (this file)
+    config.py / core.py / transports.py / storage.py / security.py   <- engine
+        server.py + static/index.html                    -> browser UI (this file)
 
 Run:
     python server.py            # then open http://127.0.0.1:8000
     python server.py --port 9000 --host 0.0.0.0
 
-Transport is chosen exactly like the desktop app -- see make_source() below.
+The transport (simulator / serial / ...) is chosen in make_source() below.
 
 Live data reaches the browser over Server-Sent Events (SSE), a one-way stream
 that is a natural fit for telemetry and needs no WebSocket library. Commands go
@@ -42,6 +41,7 @@ from storage import Storage
 from transports import SerialSource, SimulatedSource  # noqa: F401 (SerialSource for the swap)
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
+SESSION_COOKIE = "mg_session"  # gates page/bootstrap/stream access (viewer or guard)
 
 
 def make_source():
@@ -63,11 +63,12 @@ class Hub:
         self.storage = Storage()
         self.source = make_source()
         self.connected = False
+        self.armed = True
         # New id per process. All server state (buffers, latches, tokens) lives
         # in memory, so a restart wipes it -- the browser compares this against
         # what it booted with to tell "SSE dropped" from "server restarted".
         self.boot_id = secrets.token_hex(8)
-        self.tokens: dict[str, str] = {}       # token -> username
+        self.tokens: dict[str, dict[str, str]] = {}   # token -> {"user", "role"}
         self._clients: set[queue.Queue] = set()
         self._lock = threading.Lock()
         self._events: list[dict] = []          # recent log lines for new clients
@@ -151,31 +152,48 @@ class Hub:
             "timeScales": config.TIME_SCALES,
             "defaultScaleIndex": config.DEFAULT_TIME_SCALE_INDEX,
             "connected": self.connected,
+            "armed": self.armed,
             "events": self._events[-50:],
             "serverTime": time.time(),
         }
 
     # -- auth + commands ---------------------------------------------------
-    def login(self, username: str, password: str) -> str | None:
-        if security.verify_password(username, password):
-            token = secrets.token_urlsafe(24)
-            self.tokens[token] = username.strip().lower()
-            self.storage.record_audit(self.tokens[token], "LOGIN", "web")
-            self._log(f"Agent '{self.tokens[token]}' logged in (web).")
-            return token
-        return None
+    def login(self, username: str, password: str, client_ip: str) -> tuple[str | None, str | None]:
+        """Returns (token, error). `error` is a user-facing message on failure."""
+        wait = security.LOGIN_LIMITER.seconds_locked(client_ip)
+        if wait > 0:
+            return None, f"Too many attempts. Try again in {int(wait) + 1}s."
+        role = security.authenticate(username, password)
+        if role is None:
+            security.LOGIN_LIMITER.record_failure(client_ip)
+            return None, "Invalid credentials"
+        security.LOGIN_LIMITER.record_success(client_ip)
+        token = secrets.token_urlsafe(24)
+        uname = username.strip().lower()
+        self.tokens[token] = {"user": uname, "role": role}
+        self.storage.record_audit(uname, "LOGIN", f"web:{role}")
+        self._log(f"Agent '{uname}' logged in (web, {role}).")
+        return token, None
+
+    def role_for(self, token: str) -> str | None:
+        entry = self.tokens.get(token)
+        return entry["role"] if entry else None
 
     def logout(self, token: str) -> None:
-        user = self.tokens.pop(token, None)
-        if user:
-            self.storage.record_audit(user, "LOGOUT", "web")
-            self._log(f"Agent '{user}' logged out.")
+        entry = self.tokens.pop(token, None)
+        if entry:
+            self.storage.record_audit(entry["user"], "LOGOUT", "web")
+            self._log(f"Agent '{entry['user']}' logged out.")
 
     def command(self, token: str, zone: str, sensor: str, action: str) -> bool:
-        user = self.tokens.get(token)
-        if not user:
+        entry = self.tokens.get(token)
+        if not entry or entry["role"] != "guard":
             return False
+        user = entry["user"]
         self.source.send_command(Command(zone, sensor, action))
+        if zone == "SYSTEM" and sensor == "ALL" and action in ("ARM", "DISARM"):
+            self.armed = action == "ARM"
+            self._broadcast("system", {"armed": self.armed})
         self.storage.record_audit(user, action, f"{zone}.{sensor}")
         self._log(f"AUDIT: {user} issued {action} {zone}.{sensor}")
         return True
@@ -215,14 +233,38 @@ class Handler(BaseHTTPRequestHandler):
     def _token(self) -> str:
         return (self.headers.get("X-Auth-Token") or "").strip()
 
+    def _cookie_token(self) -> str:
+        raw = self.headers.get("Cookie") or ""
+        for part in raw.split(";"):
+            part = part.strip()
+            if part.startswith(f"{SESSION_COOKIE}="):
+                return part[len(SESSION_COOKIE) + 1:]
+        return ""
+
+    def _has_page_access(self) -> bool:
+        # The cookie carries whichever role last logged in (viewer or guard,
+        # guard being the stronger one) -- either is enough to view the page.
+        return security.role_satisfies(HUB.role_for(self._cookie_token()), "viewer")
+
+    def _client_ip(self) -> str:
+        return self.client_address[0]
+
     # -- routes -----------------------------------------------------------
     def do_GET(self):
         path = urlparse(self.path).path
         if path in ("/", "/index.html"):
+            if not self._has_page_access():
+                return self._serve_static("login.html")
             return self._serve_static("index.html")
+        if path == "/login.html":
+            return self._serve_static("login.html")
         if path == "/api/bootstrap":
+            if not self._has_page_access():
+                return self._send_json({"error": "login required"}, 401)
             return self._send_json(HUB.bootstrap())
         if path == "/api/stream":
+            if not self._has_page_access():
+                return self._send_json({"error": "login required"}, 401)
             return self._serve_stream()
         if path.startswith("/static/"):
             return self._serve_static(path[len("/static/"):])
@@ -232,11 +274,30 @@ class Handler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         data = self._read_json()
         if path == "/api/login":
-            token = HUB.login(str(data.get("username", "")), str(data.get("password", "")))
+            token, error = HUB.login(str(data.get("username", "")),
+                                     str(data.get("password", "")), self._client_ip())
             if token:
-                return self._send_json({"ok": True, "token": token,
-                                        "user": HUB.tokens[token]})
-            return self._send_json({"ok": False, "error": "Invalid credentials"}, 401)
+                resp = {"ok": True, "token": token, "user": HUB.tokens[token]["user"],
+                        "role": HUB.tokens[token]["role"]}
+                # The dashboard-access cookie is only set for the initial gate-page
+                # login (static/login.html); the in-page "Agent login" modal that
+                # elevates to `guard` for overrides uses the X-Auth-Token header
+                # instead, so it doesn't clobber (or get killed by logging out of)
+                # the viewer session. No `Secure` attribute yet -- this is plain
+                # HTTP until TLS is added; see security.py.
+                if data.get("cookie"):
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    cookie = f"{SESSION_COOKIE}={token}; Path=/; HttpOnly; SameSite=Lax"
+                    self.send_header("Set-Cookie", cookie)
+                    body = json.dumps(resp).encode("utf-8")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return
+                return self._send_json(resp)
+            status = 429 if "Too many attempts" in (error or "") else 401
+            return self._send_json({"ok": False, "error": error}, status)
         if path == "/api/logout":
             HUB.logout(self._token())
             return self._send_json({"ok": True})
@@ -245,7 +306,7 @@ class Handler(BaseHTTPRequestHandler):
                              str(data.get("sensor", "")), str(data.get("action", "")))
             if ok:
                 return self._send_json({"ok": True})
-            return self._send_json({"ok": False, "error": "Login required"}, 403)
+            return self._send_json({"ok": False, "error": "Guard login required"}, 403)
         self._send_json({"error": "not found"}, 404)
 
     # -- static files -----------------------------------------------------

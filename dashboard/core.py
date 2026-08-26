@@ -30,10 +30,10 @@ import config
 class Event:
     """A tiny signal/slot primitive with no GUI-framework dependency.
 
-    Deliberately NOT a Qt signal: this module is shared by both frontends (the
-    PySide6 desktop app and the stdlib web server), so it must not drag Qt into
-    a process that has no GUI. Callbacks fire on whichever thread called
-    ``emit`` -- the Qt app bridges them onto its GUI thread (see app.py).
+    Deliberately framework-agnostic: the engine must not depend on the
+    presentation layer, so a transport can be driven headless (tests, a future
+    frontend) as easily as by the web server. Callbacks fire on whichever
+    thread called ``emit`` -- the server fans them out to browsers over SSE.
     """
 
     def __init__(self) -> None:
@@ -190,9 +190,9 @@ class Source:
       * ``connection_changed(bool)`` -- link up/down (drives the DISCONNECTED UI).
       * ``notice(str)`` -- human-readable status/errors for the log pane.
 
-    These are plain `Event`s, not Qt signals, so the same Source works under the
-    desktop UI and the web server. Subclasses implement ``start``, ``stop`` and
-    ``send_command``.
+    These are plain `Event`s with no GUI-framework dependency, so the same
+    Source works headless as well as under the web server. Subclasses implement
+    ``start``, ``stop`` and ``send_command``.
     """
 
     def __init__(self, codec: Codec | None = None, parent=None):
