@@ -10,6 +10,7 @@
     --text:#e6edf3; --muted:#8b98a5;
     --ok:#3fb950; --warn:#d29922; --alarm:#f85149; --stale:#a371f7; --disc:#6e7681;
     --accent:#58a6ff;
+    --sev-low:#d29922; --sev-med:#db6d28; --sev-high:#f85149;
     --head-h:30px;
   }
   *{box-sizing:border-box}
@@ -134,6 +135,7 @@
     border-radius:5px; padding:4px 8px; font-size:11.5px; white-space:nowrap; display:none;
     font-variant-numeric:tabular-nums; z-index:2;
   }
+  .tip .tipa{font-size:10.5px; margin-top:2px; font-weight:600}
 
   /* resize handles -- kept inside the box: .win clips overflow for its rounded corners */
   .rz{position:absolute; z-index:3}
@@ -184,6 +186,35 @@
     background:rgba(248,81,73,.12); color:#ffa198; border:1px solid rgba(248,81,73,.3)}
   #authState.on{background:rgba(63,185,80,.12); color:#7ee787; border-color:rgba(63,185,80,.3)}
 
+  /* ---------- anomalies ---------- */
+  .anom-head{display:flex; align-items:center; gap:6px; margin:18px 0 8px}
+  .anom-head h3{margin:0; flex:1}
+  .anom-head select{font-size:11px; padding:1px 4px}
+  #anomCount{font-size:11px; color:var(--muted); font-variant-numeric:tabular-nums; flex:none}
+  #anoms{max-height:240px; overflow-y:auto; margin:0 -2px; padding:0 2px}
+  #anoms .empty{font-size:12px; color:var(--muted); padding:4px 2px}
+  .anom{
+    display:block; width:100%; text-align:left; padding:6px 8px; margin-bottom:5px;
+    border:1px solid var(--line); border-left:3px solid var(--sev-low);
+    border-radius:5px; background:var(--panel-2); cursor:pointer;
+  }
+  .anom.MEDIUM{border-left-color:var(--sev-med)}
+  .anom.HIGH{border-left-color:var(--sev-high)}
+  .anom .r1{display:flex; align-items:baseline; gap:6px; font-size:12px}
+  .anom .kind{font-weight:600; flex:none}
+  .anom .when{margin-left:auto; color:var(--muted); font-size:11px; flex:none;
+    font-variant-numeric:tabular-nums}
+  .anom .who{color:var(--muted); font-size:11px; overflow:hidden; white-space:nowrap;
+    text-overflow:ellipsis}
+  .anom .msg{font-size:11px; color:var(--muted); margin-top:2px; line-height:1.35}
+  .anom .live{
+    width:6px; height:6px; border-radius:50%; background:var(--sev-high); flex:none;
+    align-self:center; animation:pulse 1.2s ease-in-out infinite;
+  }
+  @keyframes pulse{50%{opacity:.2}}
+  #anomPill{cursor:pointer}
+  #anomPill.quiet{opacity:.5}
+
   #log{
     font:11.5px/1.6 ui-monospace,SFMono-Regular,Consolas,monospace; color:var(--muted);
     background:var(--bg); border:1px solid var(--line); border-radius:6px;
@@ -213,6 +244,9 @@
     <button id="resetLayout" title="Restore the default panel layout">Reset layout</button>
   </div>
   <div class="spacer"></div>
+  <div class="pill quiet" id="anomPill" title="Anomalies detected this run — click for the list">
+    ⚡ <span id="anomPillN">0</span> anomalies
+  </div>
   <div class="pill"><span class="dot" id="connDot"></span><span id="connText">connecting…</span></div>
 </header>
 
@@ -234,6 +268,25 @@
 
     <h3>Panels</h3>
     <div id="toggles"></div>
+
+    <section id="anomSection">
+      <div class="anom-head">
+        <h3>Anomalies</h3>
+        <span id="anomCount">0</span>
+        <select id="anomFilter" title="Minimum severity to show">
+          <option value="LOW">All</option>
+          <option value="MEDIUM">Medium+</option>
+          <option value="HIGH">High only</option>
+        </select>
+      </div>
+      <label class="tog" style="margin-bottom:4px">
+        <input type="checkbox" id="anomShow" checked><span>Shade on charts</span>
+      </label>
+      <label class="tog" style="margin-bottom:8px">
+        <input type="checkbox" id="anomBand" checked><span>Show expected range</span>
+      </label>
+      <div id="anoms"></div>
+    </section>
 
     <h3>Event log</h3>
     <div id="log"></div>
@@ -273,6 +326,30 @@ const fmtClock = ts => new Date(ts * 1000).toLocaleTimeString();
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 
 // ---------------------------------------------------------------------------
+// Anomalies (detected server-side by anomaly.py; the page only renders them)
+// ---------------------------------------------------------------------------
+const ANOMS = new Map();          // id -> record, oldest first (Maps keep order)
+const ANOM_CAP = 200;             // matches the server's retention
+let SHOW_ANOMS = true, SHOW_BAND = true, ANOM_MIN_SEV = "LOW";
+
+const SEV_RANK  = {LOW:0, MEDIUM:1, HIGH:2};
+const SEV_STYLE = {
+  LOW:    {fill:"rgba(210,153,34,.13)", line:"#d29922"},
+  MEDIUM: {fill:"rgba(219,109,40,.16)", line:"#db6d28"},
+  HIGH:   {fill:"rgba(248,81,73,.17)",  line:"#f85149"},
+};
+const sevOK = a => SEV_RANK[a.severity] >= SEV_RANK[ANOM_MIN_SEV];
+
+// first index of `arr` with arr[i] >= target (arr is sorted ascending)
+function lowerBoundIn(arr, target){
+  let lo = 0, hi = arr.length;
+  while (lo < hi){ const m = (lo+hi) >> 1; if (arr[m] < target) lo = m+1; else hi = m; }
+  return lo;
+}
+const fmtDur = s => s < 60 ? `${s.toFixed(0)} s`
+                           : `${Math.floor(s/60)}m ${Math.round(s%60)}s`;
+
+// ---------------------------------------------------------------------------
 // Canvas chart -- no library: zoom (wheel), pan (drag), live-follow, hover
 // ---------------------------------------------------------------------------
 class Chart {
@@ -286,6 +363,10 @@ class Chart {
     this.state = "DISCONNECTED";
     this.hover = null;
     this.dirty = true;
+    // anomaly overlay: the windows on this sensor, plus the expected-range
+    // ribbon the detector judged each sample against
+    this.anoms = new Map();          // id -> record
+    this.bt = []; this.blo = []; this.bhi = [];
 
     canvas.addEventListener("wheel", e => this.onWheel(e), {passive:false});
     canvas.addEventListener("pointerdown", e => this.onDown(e));
@@ -299,6 +380,35 @@ class Chart {
     this.t.push(ts); this.v.push(val);
     if (this.t.length > 20000) { this.t.splice(0, 5000); this.v.splice(0, 5000); }
     this.dirty = true;
+  }
+
+  pushBand(ts, lo, hi){
+    if (lo == null || hi == null) return;
+    this.bt.push(ts); this.blo.push(lo); this.bhi.push(hi);
+    if (this.bt.length > 20000){
+      this.bt.splice(0,5000); this.blo.splice(0,5000); this.bhi.splice(0,5000);
+    }
+    this.dirty = true;
+  }
+
+  setAnomaly(rec){
+    this.anoms.set(rec.id, rec);
+    // keep the map from growing without bound on a long run; the sidebar list
+    // and the server hold the same window, so dropping the oldest is safe
+    while (this.anoms.size > ANOM_CAP) this.anoms.delete(this.anoms.keys().next().value);
+    this.dirty = true;
+  }
+
+  clearAnoms(){ this.anoms.clear(); this.bt.length = this.blo.length = this.bhi.length = 0; }
+
+  /** The anomaly window covering `ts`, worst severity first (for the tooltip). */
+  anomalyAt(ts){
+    let best = null;
+    for (const a of this.anoms.values()){
+      if (!sevOK(a) || ts < a.t0 || ts > a.t1) continue;
+      if (!best || SEV_RANK[a.severity] > SEV_RANK[best.severity]) best = a;
+    }
+    return best;
   }
 
   goLive(){ this.live = true; this.dirty = true; }
@@ -365,6 +475,53 @@ class Chart {
       if (d.warn[1]!=null) band(d.warn[1], d.alarm?.[1] ?? yMax, "rgba(210,153,34,.13)");
     }
 
+    // ---- learned expected range ------------------------------------------
+    // The band the detector judged each sample against (baseline +/- level_z
+    // sigma). Drawn under everything else: it is context, not a reading.
+    if (SHOW_BAND && this.bt.length > 1){
+      let j0 = lowerBoundIn(this.bt, t0) - 1; if (j0 < 0) j0 = 0;
+      c.save(); c.beginPath(); c.rect(L,T,pw,ph); c.clip();
+      c.beginPath();
+      let jEnd = j0, n = 0;
+      for (let j=j0;j<this.bt.length;j++){
+        const x = X(this.bt[j]), y = Y(this.bhi[j]);
+        n++ ? c.lineTo(x,y) : c.moveTo(x,y);
+        jEnd = j;
+        if (this.bt[j] > t1) break;
+      }
+      for (let j=jEnd;j>=j0;j--) c.lineTo(X(this.bt[j]), Y(this.blo[j]));
+      c.closePath();
+      c.fillStyle = "rgba(88,166,255,.075)"; c.fill();
+      c.restore();
+    }
+
+    // ---- anomaly windows --------------------------------------------------
+    // A vertical band per detected window, severity-coloured, with a solid cap
+    // along the top; an open (still-running) window gets a dashed trailing edge.
+    if (SHOW_ANOMS && this.anoms.size){
+      c.save(); c.beginPath(); c.rect(L,T,pw,ph); c.clip();
+      c.font = "9.5px sans-serif"; c.textAlign = "left"; c.textBaseline = "top";
+      for (const a of this.anoms.values()){
+        if (!sevOK(a) || a.t1 < t0 || a.t0 > t1) continue;
+        const st = SEV_STYLE[a.severity] || SEV_STYLE.LOW;
+        const x1 = X(Math.max(a.t0, t0));
+        const x2 = X(Math.min(a.t1, t1));
+        const bw = Math.max(2, x2 - x1);
+        c.fillStyle = st.fill; c.fillRect(x1, T, bw, ph);
+        c.fillStyle = st.line; c.fillRect(x1, T, bw, 2.5);
+        c.globalAlpha = .55; c.strokeStyle = st.line; c.lineWidth = 1;
+        c.setLineDash(a.open ? [3,3] : []);
+        c.beginPath(); c.moveTo(x1+.5, T); c.lineTo(x1+.5, T+ph);
+        c.moveTo(x1+bw-.5, T); c.lineTo(x1+bw-.5, T+ph); c.stroke();
+        c.setLineDash([]); c.globalAlpha = 1;
+        if (bw > 58){
+          c.fillStyle = st.line;
+          c.fillText(a.kindLabel, x1 + 4, T + 6);
+        }
+      }
+      c.restore();
+    }
+
     // grid + axes -- thin out the ticks on small windows
     const ySteps = ph < 130 ? 2 : 4;
     const xSteps = pw < 330 ? 2 : 4;
@@ -414,7 +571,11 @@ class Chart {
         c.beginPath(); c.moveTo(hx,T); c.lineTo(hx,T+ph); c.stroke(); c.setLineDash([]);
         c.fillStyle=col; c.beginPath(); c.arc(hx,hy,3.5,0,7); c.fill();
         this.tip.style.display="block";
-        this.tip.textContent = `${this.v[idx]} ${d.unit} · ${fmtClock(this.t[idx])}`;
+        const hit = SHOW_ANOMS ? this.anomalyAt(this.t[idx]) : null;
+        this.tip.innerHTML =
+          `${this.v[idx]} ${d.unit} · ${fmtClock(this.t[idx])}` +
+          (hit ? `<div class="tipa" style="color:${SEV_STYLE[hit.severity].line}">`
+               + `${hit.kindLabel} · ${hit.severity} · ${hit.score}σ</div>` : "");
         this.tip.style.left = Math.min(w-this.tip.offsetWidth-6, hx+10) + "px";
         this.tip.style.top  = Math.max(2, hy-30) + "px";
       }
@@ -428,11 +589,7 @@ class Chart {
     this.dirty = false;
   }
 
-  lowerBound(target){                       // first index with t >= target
-    let lo=0, hi=this.t.length;
-    while(lo<hi){ const m=(lo+hi)>>1; if(this.t[m]<target) lo=m+1; else hi=m; }
-    return lo;
-  }
+  lowerBound(target){ return lowerBoundIn(this.t, target); }   // first t >= target
 }
 
 // ---------------------------------------------------------------------------
@@ -812,9 +969,11 @@ function build(){
     charts.set(d.key, ch);
     new ResizeObserver(() => { ch.dirty = true; }).observe(el.querySelector(".chart-wrap"));
 
-    // seed history
+    // seed history + whatever expected range the detector had already learned
     const H = d.history;
     for (let i=0;i<H.t.length;i++) ch.push(H.t[i], H.v[i]);
+    if (d.band) for (let i=0;i<d.band.t.length;i++)
+      ch.pushBand(d.band.t[i], d.band.lo[i], d.band.hi[i]);
     if (d.value != null) setSensor(d.key, d.value, d.state);
 
     el.querySelector(".scale").addEventListener("change", e => {
@@ -835,9 +994,25 @@ function build(){
   // restore the user's last arrangement, else the default 2-column tiling
   if (!loadLayout()) defaultLayout();
 
+  // the server ships them newest-first; replay oldest-first so ANOMS stays
+  // in insertion order and the oldest is the one evicted at the cap
+  seedAnomalies(BOOT);
+
   (BOOT.events||[]).forEach(e => addLog(e.msg, e.ts));
   setConnected(BOOT.connected);
   setAuth(false);
+}
+
+function seedAnomalies(boot){
+  if (boot.anomalyEnabled === false){
+    $("#anomSection").style.display = "none";
+    $("#anomPill").style.display = "none";
+    return;
+  }
+  ANOMS.clear();
+  for (const ch of charts.values()) ch.anoms.clear();
+  (boot.anomalies || []).slice().reverse().forEach(upsertAnomaly);
+  renderAnoms();
 }
 
 // ---------------------------------------------------------------------------
@@ -901,11 +1076,15 @@ async function resync(){
     // the server's ring buffer is the truth; replacing (not appending) also
     // fills in whatever arrived while the stream was down
     ch.t.length = 0; ch.v.length = 0;
+    ch.clearAnoms();
     const H = d.history;
     for (let i=0;i<H.t.length;i++) ch.push(H.t[i], H.v[i]);
+    if (d.band) for (let i=0;i<d.band.t.length;i++)
+      ch.pushBand(d.band.t[i], d.band.lo[i], d.band.hi[i]);
     ch.state = d.state; ch.dirty = true;
     if (d.value != null) setSensor(d.key, d.value, d.state);
   }
+  seedAnomalies(boot);                   // includes any found while we were away
   _bannerKey = null;                     // state changed underneath it
   refreshBanner();
 
@@ -926,6 +1105,95 @@ function addLog(msg, ts){
   el.textContent += `[${new Date((ts||Date.now()/1000)*1000).toLocaleTimeString()}] ${msg}\n`;
   if (atBottom) el.scrollTop = el.scrollHeight;
 }
+
+// ---------------------------------------------------------------------------
+// Anomaly pane
+// ---------------------------------------------------------------------------
+function upsertAnomaly(rec){
+  ANOMS.set(rec.id, rec);
+  while (ANOMS.size > ANOM_CAP) ANOMS.delete(ANOMS.keys().next().value);
+  const ch = charts.get(rec.key);
+  if (ch) ch.setAnomaly(rec);        // repaints that chart on the next frame
+  scheduleAnomRender();
+}
+
+// An open window is rewritten on every sample of its sensor (twice a second for
+// the fastest one), so rebuilding the list on each message would thrash the DOM.
+// The canvas overlay is already live; the list can lag a beat.
+let _anomTimer = null;
+function scheduleAnomRender(){
+  if (_anomTimer) return;
+  _anomTimer = setTimeout(() => { _anomTimer = null; renderAnoms(); }, 300);
+}
+
+const esc = s => String(s).replace(/[&<>"]/g, c =>
+  ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+
+function renderAnoms(){
+  const box = $("#anoms");
+  const shown = [...ANOMS.values()].filter(sevOK)
+                  .sort((a,b) => b.t1 - a.t1 || b.id - a.id)
+                  .slice(0, 50);
+
+  const openN = shown.filter(a => a.open).length;
+  $("#anomCount").textContent = openN ? `${shown.length} · ${openN} live` : shown.length;
+  const pill = $("#anomPill");
+  $("#anomPillN").textContent = ANOMS.size;
+  pill.classList.toggle("quiet", ANOMS.size === 0);
+
+  if (!shown.length){
+    box.innerHTML = `<div class="empty">${ANOMS.size ? "None at this severity."
+                                                    : "Nothing unusual so far."}</div>`;
+    return;
+  }
+  box.innerHTML = shown.map(a => `
+    <button class="anom ${a.severity}" data-id="${a.id}"
+            title="${esc(a.message)}">
+      <div class="r1">
+        ${a.open ? '<span class="live"></span>' : ""}
+        <span class="kind" style="color:${SEV_STYLE[a.severity].line}">${esc(a.kindLabel)}</span>
+        <span class="who">${esc(a.zone)} · ${esc(a.label)}</span>
+        <span class="when">${fmtClock(a.t0)}</span>
+      </div>
+      <div class="msg">${esc(a.message)}</div>
+    </button>`).join("");
+}
+
+/** Open the sensor's window and zoom its chart onto the anomaly (LoadRunner's
+    click-an-anomaly-to-go-there). Padded either side so the run-up is visible. */
+function focusAnomaly(rec){
+  const win = wins.get(rec.key), ch = charts.get(rec.key);
+  if (!win || !ch) return;
+  win.reopen();                       // no-op if it is already open; also focuses
+  const dur = Math.max(rec.duration || 0, 5);
+  ch.windowSec = clamp(dur * 5, 20, 24*3600);
+  ch.live = false;
+  ch.right = rec.t1 + dur * 1.5;
+  ch.dirty = true;
+}
+
+$("#anoms").addEventListener("click", e => {
+  const b = e.target.closest(".anom"); if (!b) return;
+  const rec = ANOMS.get(+b.dataset.id);
+  if (rec) focusAnomaly(rec);
+});
+$("#anomShow").addEventListener("change", e => {
+  SHOW_ANOMS = e.target.checked;
+  for (const ch of charts.values()) ch.dirty = true;
+});
+$("#anomBand").addEventListener("change", e => {
+  SHOW_BAND = e.target.checked;
+  for (const ch of charts.values()) ch.dirty = true;
+});
+$("#anomFilter").addEventListener("change", e => {
+  ANOM_MIN_SEV = e.target.value;
+  for (const ch of charts.values()) ch.dirty = true;
+  renderAnoms();
+});
+$("#anomPill").addEventListener("click", () => {
+  if (document.body.classList.contains("side-collapsed")) $("#sideToggle").click();
+  $("#anomSection").scrollIntoView({behavior:"smooth", block:"nearest"});
+});
 
 // ---------------------------------------------------------------------------
 // Auth + commands
@@ -1013,8 +1281,13 @@ window.addEventListener("resize", () => {
     const m = JSON.parse(ev.data);
     if (m.type === "reading"){
       const ch = charts.get(m.key);
-      if (ch){ ch.push(m.ts, m.value); setSensor(m.key, m.value, m.state); }
-    } else if (m.type === "connection"){ setConnected(m.connected); }
+      if (ch){
+        ch.push(m.ts, m.value);
+        if (m.band) ch.pushBand(m.ts, m.band[0], m.band[1]);
+        setSensor(m.key, m.value, m.state);
+      }
+    } else if (m.type === "anomaly"){ upsertAnomaly(m.anomaly); }
+    else if (m.type === "connection"){ setConnected(m.connected); }
     else if (m.type === "log"){ addLog(m.msg, m.ts); }
   };
   // `open` fires on every (re)connection, including the first -- skip that one,

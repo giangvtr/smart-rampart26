@@ -35,6 +35,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
 
+import anomaly
 import config
 import security
 from core import Command
@@ -62,6 +63,10 @@ class Hub:
     def __init__(self):
         self.storage = Storage()
         self.source = make_source()
+        # Learns each stream's normal and flags the windows that break it. It
+        # lives here rather than in the browser so every tab sees the same
+        # verdicts, and so one opened late still gets what it missed.
+        self.detector = anomaly.AnomalyEngine()
         self.connected = False
         # New id per process. All server state (buffers, latches, tokens) lives
         # in memory, so a restart wipes it -- the browser compares this against
@@ -107,10 +112,23 @@ class Hub:
     # -- source callbacks (fire on the transport thread) -------------------
     def _on_reading(self, reading) -> None:
         prev = self.storage.record_reading(reading)
+        # score before broadcasting, so the reading can carry the expected range
+        # this very sample was judged against -- the chart draws them together
+        records = self.detector.feed(reading)
         self._broadcast("reading", {
             "key": reading.key, "zone": reading.zone, "sensor": reading.sensor,
             "value": reading.value, "state": reading.state, "ts": reading.ts,
+            "band": self.detector.current_band(reading.key),
         })
+        for record in records:
+            self._broadcast("anomaly", {"anomaly": record})
+            # Log it once, when the window closes: while it is open its kind and
+            # severity are still being written, and a spike that turns out to be
+            # a level shift should not appear in the log twice.
+            if not record["open"]:
+                self._log(f"ANOMALY [{record['zone']}·{record['label']}] "
+                          f"{record['kindLabel']} ({record['severity']}) — "
+                          f"{record['message']}")
         if prev is not None:
             unit = config.SENSORS_BY_KEY[reading.key].unit
             self._log(f"[{reading.zone}·{reading.sensor}] {prev} → {reading.state}"
@@ -142,6 +160,8 @@ class Hub:
                 "history": {"t": times, "v": values},
                 "state": buf.last_state or config.STATE_DISCONNECTED,
                 "value": buf.last_value,
+                "detectAnomalies": s.detect_anomalies,
+                "band": self.detector.band(s.key),
             })
         return {
             "bootId": self.boot_id,
@@ -151,6 +171,8 @@ class Hub:
             "timeScales": config.TIME_SCALES,
             "defaultScaleIndex": config.DEFAULT_TIME_SCALE_INDEX,
             "connected": self.connected,
+            "anomalyEnabled": self.detector.enabled,
+            "anomalies": self.detector.recent(60),
             "events": self._events[-50:],
             "serverTime": time.time(),
         }
