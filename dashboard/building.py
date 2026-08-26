@@ -134,33 +134,37 @@ ROOMS = [
     Room("B1_ARCHIVE", "Archive & Vault", "B1", 1, 1, 18, 12,
          zones=["GALLERY", "BASEMENT"], live=True,
          note="Live hardware — the physical MuseumGuard rig", style="archive"),
-    Room("B1_PLANT", "Plant room", "B1", 21, 1, 18, 12,
-         sensors=["TEMP", "HUMIDITY", "WATER", "SMOKE"], style="plant"),
+    Room("B1_ROMAN", "Roman Antiquities", "B1", 21, 1, 18, 12,
+         sensors=["TEMP", "HUMIDITY", "WATER", "CASE_TILT"], style="antiquities"),
     Room("B1_LOADING", "Loading bay", "B1", 1, 15, 22, 10,
          sensors=["DOOR", "MOTION", "KEYPAD"], style="loading"),
-    Room("B1_CORRIDOR", "Service corridor", "B1", 25, 15, 14, 10,
-         sensors=["MOTION", "LIGHT", "WATER"], style="corridor"),
+    Room("B1_CASTS", "Cast Court", "B1", 25, 15, 14, 10,
+         sensors=["MOTION", "LIGHT", "VIBRATION"], style="casts"),
 
     # -- G ----------------------------------------------------------------
     Room("G_LOBBY", "Lobby", "G", 1, 1, 16, 13,
          sensors=["TEMP", "HUMIDITY", "MOTION", "SOUND"], style="lobby"),
     Room("G_EGYPT", "Egyptian Wing", "G", 19, 1, 20, 13,
-         sensors=["TEMP", "HUMIDITY", "LIGHT", "CASE_TILT", "MOTION", "VIBRATION"], style="egypt"),
+         sensors=["TEMP", "HUMIDITY", "LIGHT", "CASE_TILT", "MOTION", "VIBRATION"],
+         style="egypt"),
     Room("G_SCULPT", "Sculpture Hall", "G", 1, 16, 22, 9,
          sensors=["TEMP", "HUMIDITY", "LIGHT", "VIBRATION"], style="sculpture"),
-    Room("G_SHOP", "Shop & Café", "G", 25, 16, 14, 9,
-         sensors=["TEMP", "SMOKE", "MOTION"], style="shop"),
+    Room("G_ARMOURY", "Arms & Armour", "G", 25, 16, 14, 9,
+         sensors=["TEMP", "HUMIDITY", "CASE_TILT", "MOTION"], style="armoury"),
 
     # -- F1 ---------------------------------------------------------------
     Room("F1_PAINT", "Paintings Gallery", "F1", 1, 1, 20, 13,
-         sensors=["TEMP", "HUMIDITY", "LIGHT", "UV", "CASE_TILT", "MOTION"], style="paintings"),
+         sensors=["TEMP", "HUMIDITY", "LIGHT", "UV", "CASE_TILT", "MOTION"],
+         style="paintings"),
     Room("F1_JEWELS", "Crown Jewels", "F1", 23, 1, 16, 13,
          sensors=["CASE_TILT", "VIBRATION", "SOUND", "MOTION", "KEYPAD", "LIGHT"],
-         note="Highest-value room — tilt/vibration/sound corroborate each other", style="vault"),
-    Room("F1_TEXTILE", "Textile Store", "F1", 1, 16, 18, 9,
-         sensors=["TEMP", "HUMIDITY", "LIGHT", "UV"], style="textile"),
-    Room("F1_SERVER", "Server room", "F1", 21, 16, 18, 9,
-         sensors=["TEMP", "HUMIDITY", "SMOKE", "WATER", "KEYPAD"], style="server"),
+         note="Highest-value room — tilt/vibration/sound corroborate each other",
+         style="vault"),
+    Room("F1_TEXTILE", "Textile Gallery", "F1", 1, 16, 18, 9,
+         sensors=["TEMP", "HUMIDITY", "LIGHT", "UV"], style="textiles"),
+    Room("F1_CERAMICS", "Asian Ceramics", "F1", 21, 16, 18, 9,
+         sensors=["TEMP", "HUMIDITY", "CASE_TILT", "VIBRATION", "SMOKE"],
+         style="ceramics"),
 ]
 
 ROOMS_BY_ID = {r.id: r for r in ROOMS}
@@ -187,14 +191,18 @@ INCIDENTS = {
                   {"CASE_TILT": 7.0, "VIBRATION": 620.0, "SOUND": 92.0}),
     "G_EGYPT": ("Case tamper in the Egyptian Wing",
                 {"CASE_TILT": 6.0, "VIBRATION": 480.0, "MOTION": 1.0}),
-    "F1_SERVER": ("Overheat / smoke in the server room",
-                  {"SMOKE": 380.0, "TEMP": 31.0}),
-    "B1_PLANT": ("Leak in the plant room",
+    "G_ARMOURY": ("Armour stand disturbed",
+                  {"CASE_TILT": 6.5, "MOTION": 1.0}),
+    "B1_ROMAN": ("Water ingress in the Roman gallery",
                  {"WATER": 420.0, "HUMIDITY": 72.0}),
     "B1_LOADING": ("Forced entry at the loading bay",
                    {"DOOR": 1.0, "MOTION": 1.0, "KEYPAD": 5.0}),
+    "B1_CASTS": ("Impact in the Cast Court",
+                 {"VIBRATION": 540.0, "MOTION": 1.0}),
     "F1_TEXTILE": ("Light/UV overexposure on textiles",
                    {"LIGHT": 950.0, "UV": 5.5}),
+    "F1_CERAMICS": ("Smoke in the ceramics gallery",
+                    {"SMOKE": 380.0, "TEMP": 30.0}),
     "G_SCULPT": ("Structural vibration in the Sculpture Hall",
                  {"VIBRATION": 520.0}),
 }
@@ -207,37 +215,38 @@ INCIDENT_HOLD_S = 15.0
 # --------------------------------------------------------------------------
 # Furnishing -- what makes a room read as a room
 # --------------------------------------------------------------------------
-# Both renderers draw the *same* numbers, so the CSS-3D and three.js variants
-# stay a fair comparison: geometry lives here, not in either renderer.
+# The renderer draws these; it holds no dimensions of its own beyond how many
+# pixels a metre is worth on screen. Coordinates are room-local metres.
 #
-# Coordinates are room-local metres. Volumes give the CENTRE (x, y) of their
-# footprint plus w/d/h; wall-mounted pieces give a wall ("n" = the y=0 edge,
-# "s" = y=h, "w" = x=0, "e" = x=w), a distance `at` along it, and a `sill`
-# height. None of this is load-bearing for the monitoring -- it is set dressing
-# so "which room am I looking at" is answerable from across the room.
+# Volumes give the CENTRE (x, y) of their footprint plus w/d/h. Wall-mounted
+# pieces give a wall ("n" = the y=0 edge, "s" = y=h, "w" = x=0, "e" = x=w), a
+# distance `at` along it, and a `sill` height.
 #
-#   block   solid box (shelving, racks, crates, tanks, counters, benches)
-#   case    glass display case -- drawn translucent
-#   statue  plinth with a figure on top
+#   figure  an exhibit standing on a plinth. `pose` picks the silhouette:
+#           statue / torso / bust / vase / armour / mannequin
+#   case    glass vitrine, drawn translucent; `holds` puts an exhibit inside
+#   block   solid box (shelving, crates, benches, counters, plinths)
 #   column  round structural column, full storey height
-#   painting / door / window   flat, mounted on a wall
+#   painting / relief / hanging / door   flat, mounted on a wall
 import random
 
 FX_COLORS = {
     "frame":  "#d4af37",   # gilt picture frames
-    "stone":  "#aab4bf",   # marble
+    "stone":  "#b6c0cb",   # marble and plaster
+    "bronze": "#b98a4b",
     "glass":  "#8ad3ff",   # vitrine glazing
-    "steel":  "#5d6f80",   # shelving
+    "steel":  "#7d8ea0",   # armour, shelving
     "wood":   "#7a5a3a",   # benches, counters
     "crate":  "#8a6c46",
-    "rack":   "#3f5262",   # server racks
-    "plant":  "#4e6d7c",   # tanks and plant
-    "fabric": "#8c6f9a",   # textile racks
+    "fabric": "#a483b8",   # textiles
+    "clay":   "#c2764e",   # ceramics
+    "gold":   "#e5c76b",   # the jewels
     "door":   "#58a6ff",
 }
 
 
-def _art(rng, room, walls, every, sill, h, kind="painting", colour=None):
+def _wall(rng, room, walls, every, sill, h, kind="painting", colour=None,
+          wmin=1.0, wmax=2.1):
     """Evenly space wall-mounted pieces along one or more walls."""
     out = []
     for wall in walls:
@@ -249,7 +258,7 @@ def _art(rng, room, walls, every, sill, h, kind="painting", colour=None):
                 "t": kind,
                 "wall": wall,
                 "at": round(1.5 + usable * (i + 0.5) / n, 2),
-                "w": round(rng.uniform(1.0, 2.1), 2),
+                "w": round(rng.uniform(wmin, wmax), 2),
                 "h": round(h * rng.uniform(0.85, 1.2), 2),
                 "sill": sill,
                 "c": colour or FX_COLORS["frame"],
@@ -257,22 +266,19 @@ def _art(rng, room, walls, every, sill, h, kind="painting", colour=None):
     return out
 
 
-def _grid(room, cols, rows, w, d, h, colour, kind="block",
-          inset=2.0, y0=None, y1=None):
-    """A regular array of identical volumes covering part of the room."""
-    out = []
+def _row(room, n, y, w, d, h, colour, kind="block", inset=2.5, **extra):
+    """A row of identical pieces across the room at depth `y`."""
     x0, x1 = inset, room.w - inset
-    yy0 = inset if y0 is None else y0
-    yy1 = (room.h - inset) if y1 is None else y1
-    for i in range(cols):
-        for j in range(rows):
-            out.append({
-                "t": kind,
-                "x": round(x0 + (x1 - x0) * (i + 0.5) / cols, 2),
-                "y": round(yy0 + (yy1 - yy0) * (j + 0.5) / rows, 2),
-                "w": w, "d": d, "h": h, "c": colour,
-            })
-    return out
+    return [dict({
+        "t": kind,
+        "x": round(x0 + (x1 - x0) * (i + 0.5) / n, 2),
+        "y": round(y, 2),
+        "w": w, "d": d, "h": h, "c": colour,
+    }, **extra) for i in range(n)]
+
+
+def _figures(room, n, y, h, pose, colour, inset=2.5, w=1.3):
+    return _row(room, n, y, w, w, h, colour, kind="figure", inset=inset, pose=pose)
 
 
 def _door(room):
@@ -291,80 +297,96 @@ def _door(room):
 def furnish(room) -> list[dict]:
     """Deterministic per room -- the same museum every reload."""
     rng = random.Random(room.id)
-    W, D, F = room.w, room.h, FX_COLORS
+    D, F = room.h, FX_COLORS
     s = room.style
     f: list[dict] = []
 
+    # ---- galleries ------------------------------------------------------
     if s == "paintings":
-        f += _art(rng, room, "nsew", 3.4, 1.5, 1.5)
-        f += _grid(room, 2, 1, 2.4, 1.3, 1.5, F["glass"], "case",
-                   y0=D * 0.40, y1=D * 0.60)
-        f += _grid(room, 3, 1, 2.4, 0.5, 0.45, F["wood"], y0=D * 0.74, y1=D * 0.82)
+        f += _wall(rng, room, "nsew", 3.4, 1.5, 1.5)
+        f += _row(room, 2, D * 0.46, 2.4, 1.3, 1.5, F["glass"], "case",
+                  holds="bust", inset=6.0)
+        f += _row(room, 3, D * 0.78, 2.4, 0.5, 0.45, F["wood"])
 
     elif s == "egypt":
-        f += _art(rng, room, "ns", 4.6, 1.6, 1.7)
-        f += [{"t": "statue", "x": round(W * (0.18 + 0.32 * i), 2),
-               "y": round(D * 0.30, 2), "w": 1.3, "d": 1.3, "h": 2.7,
-               "c": F["stone"]} for i in range(3)]
-        f += _grid(room, 3, 1, 2.6, 1.4, 1.6, F["glass"], "case",
-                   y0=D * 0.66, y1=D * 0.80)
+        f += _wall(rng, room, "ns", 4.6, 1.5, 1.8, kind="relief", colour=F["stone"])
+        f += _figures(room, 3, D * 0.28, 2.8, "statue", F["stone"], inset=3.5)
+        # a sarcophagus down the middle, then vitrines along the back
+        f += [{"t": "block", "x": round(room.w / 2, 2), "y": round(D * 0.54, 2),
+               "w": 3.4, "d": 1.3, "h": 0.9, "c": F["bronze"]}]
+        f += _row(room, 3, D * 0.80, 2.2, 1.3, 1.6, F["glass"], "case", holds="vase")
 
     elif s == "sculpture":
-        f += [{"t": "statue", "x": round(W * (0.12 + 0.19 * i), 2),
-               "y": round(D * (0.30 if i % 2 == 0 else 0.70), 2),
-               "w": 1.5, "d": 1.5, "h": 2.9 if i % 2 == 0 else 2.3,
-               "c": F["stone"]} for i in range(5)]
-        f += [{"t": "column", "x": round(W * (0.25 + 0.5 * i), 2),
+        f += _figures(room, 4, D * 0.30, 2.9, "statue", F["stone"], inset=3.0, w=1.5)
+        f += _figures(room, 3, D * 0.68, 2.2, "torso", F["stone"], inset=5.0, w=1.4)
+        f += [{"t": "column", "x": round(room.w * (0.25 + 0.5 * i), 2),
                "y": round(D * 0.5, 2), "w": 1.0, "d": 1.0, "h": WALL_H,
                "c": F["stone"]} for i in range(2)]
 
+    elif s == "casts":
+        # a cast court is wall-to-wall plaster copies, floor to ceiling
+        f += _figures(room, 3, D * 0.30, 3.4, "statue", F["stone"], inset=2.5, w=1.6)
+        f += _figures(room, 3, D * 0.72, 2.0, "bust", F["stone"], inset=3.0, w=1.1)
+
+    elif s == "antiquities":
+        f += _wall(rng, room, "n", 4.2, 1.5, 1.6, kind="relief", colour=F["stone"])
+        f += _figures(room, 3, D * 0.28, 2.4, "torso", F["stone"], inset=3.0)
+        f += _row(room, 3, D * 0.62, 2.2, 1.3, 1.5, F["glass"], "case", holds="vase")
+        f += _figures(room, 2, D * 0.86, 1.9, "bust", F["stone"], inset=5.0, w=1.0)
+
+    elif s == "armoury":
+        f += _figures(room, 3, D * 0.30, 2.5, "armour", F["steel"], inset=2.5, w=1.2)
+        # low weapon cases, and shields hung on the back wall
+        f += _row(room, 2, D * 0.66, 3.2, 1.1, 1.1, F["glass"], "case", holds="blade")
+        f += _wall(rng, room, "n", 3.0, 1.9, 1.1, kind="relief", colour=F["steel"],
+                   wmin=0.9, wmax=1.3)
+
     elif s == "vault":
         # small room, high value: cases in a ring around one hero case
-        f += _grid(room, 3, 2, 2.0, 1.5, 1.4, F["glass"], "case", inset=2.6)
-        f += [{"t": "case", "x": round(W / 2, 2), "y": round(D / 2, 2),
-               "w": 3.0, "d": 3.0, "h": 2.0, "c": F["glass"]}]
-        f += _art(rng, room, "n", 5.0, 1.7, 1.2)
+        f += _row(room, 3, D * 0.28, 2.0, 1.5, 1.4, F["glass"], "case",
+                  holds="gem", inset=2.6)
+        f += _row(room, 3, D * 0.80, 2.0, 1.5, 1.4, F["glass"], "case",
+                  holds="gem", inset=2.6)
+        f += [{"t": "case", "x": round(room.w / 2, 2), "y": round(D / 2, 2),
+               "w": 3.0, "d": 3.0, "h": 2.0, "c": F["glass"], "holds": "crown"}]
+        f += _wall(rng, room, "n", 5.0, 1.7, 1.2)
 
-    elif s == "archive":
-        f += _grid(room, 2, 3, 6.0, 0.9, 2.6, F["steel"])          # shelving runs
-        f += [{"t": "block", "x": round(W * 0.5, 2), "y": round(D * 0.5, 2),
-               "w": 2.0, "d": 1.0, "h": 0.8, "c": F["wood"]}]      # work table
+    elif s == "textiles":
+        # hangings are tall and narrow; mannequins wear the dressed pieces
+        f += _wall(rng, room, "nsw", 3.2, 0.9, 2.4, kind="hanging",
+                   colour=F["fabric"], wmin=1.2, wmax=1.8)
+        f += _figures(room, 3, D * 0.42, 2.0, "mannequin", F["fabric"], inset=3.0, w=1.0)
+        f += _row(room, 2, D * 0.78, 3.0, 1.2, 1.1, F["glass"], "case", holds="blade")
 
-    elif s == "textile":
-        f += _grid(room, 2, 3, 5.2, 0.8, 2.4, F["fabric"])
-        f += _art(rng, room, "n", 6.0, 1.4, 1.6, colour=F["fabric"])
+    elif s == "ceramics":
+        f += _figures(room, 4, D * 0.30, 1.9, "vase", F["clay"], inset=2.5, w=1.0)
+        f += _row(room, 3, D * 0.66, 2.2, 1.3, 1.6, F["glass"], "case", holds="vase")
+        f += _wall(rng, room, "n", 2.6, 2.0, 0.9, kind="relief", colour=F["clay"],
+                   wmin=0.8, wmax=1.1)
 
-    elif s == "server":
-        f += _grid(room, 4, 2, 1.0, 2.0, 2.2, F["rack"])
-
-    elif s == "plant":
-        f += [{"t": "block", "x": round(W * 0.25, 2), "y": round(D * 0.30, 2),
-               "w": 4.0, "d": 3.0, "h": 2.6, "c": F["plant"]},
-              {"t": "block", "x": round(W * 0.68, 2), "y": round(D * 0.28, 2),
-               "w": 3.0, "d": 3.0, "h": 3.0, "c": F["plant"]},
-              {"t": "block", "x": round(W * 0.5, 2), "y": round(D * 0.75, 2),
-               "w": 8.0, "d": 1.2, "h": 1.0, "c": F["steel"]}]
-
+    # ---- the two rooms that are not galleries, plus back-of-house -------
     elif s == "lobby":
-        f += [{"t": "column", "x": round(W * (0.28 + 0.44 * (i % 2)), 2),
+        f += [{"t": "column", "x": round(room.w * (0.28 + 0.44 * (i % 2)), 2),
                "y": round(D * (0.30 + 0.42 * (i // 2)), 2),
                "w": 1.1, "d": 1.1, "h": WALL_H, "c": F["stone"]} for i in range(4)]
-        f += [{"t": "block", "x": round(W * 0.5, 2), "y": round(D * 0.18, 2),
+        f += [{"t": "block", "x": round(room.w * 0.5, 2), "y": round(D * 0.18, 2),
                "w": 5.0, "d": 1.4, "h": 1.1, "c": F["wood"]}]      # reception desk
-        f += _grid(room, 2, 1, 3.0, 0.6, 0.45, F["wood"], y0=D * 0.82, y1=D * 0.90)
+        f += _row(room, 2, D * 0.86, 3.0, 0.6, 0.45, F["wood"], inset=3.5)
 
-    elif s == "shop":
-        f += _grid(room, 3, 1, 3.0, 1.0, 1.2, F["wood"], y0=D * 0.28, y1=D * 0.36)
-        f += _grid(room, 2, 1, 4.0, 0.7, 2.0, F["steel"], y0=D * 0.72, y1=D * 0.80)
+    elif s == "archive":
+        f += [r for j in range(3)
+              for r in _row(room, 2, 2.0 + (D - 4.0) * (j + 0.5) / 3,
+                            6.0, 0.9, 2.6, F["steel"])]           # shelving runs
+        f += [{"t": "block", "x": round(room.w * 0.5, 2), "y": round(D * 0.5, 2),
+               "w": 2.0, "d": 1.0, "h": 0.8, "c": F["wood"]}]     # work table
 
     elif s == "loading":
-        f += _grid(room, 3, 2, 2.2, 2.2, 1.8, F["crate"])
+        f += [r for j in range(2)
+              for r in _row(room, 3, 3.0 + (D - 6.0) * (j + 0.5) / 2,
+                            2.2, 2.2, 1.8, F["crate"])]
         # the roller shutter the DOOR sensor watches
         f += [{"t": "door", "wall": "w", "at": round(D / 2, 2),
                "w": 4.5, "h": 3.4, "sill": 0.0, "c": F["door"]}]
-
-    elif s == "corridor":
-        f += _grid(room, 1, 3, 1.2, 0.6, 1.9, F["steel"], y0=1.5, y1=D - 1.5)
 
     if s != "loading":
         f += _door(room)

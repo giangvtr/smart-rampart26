@@ -76,7 +76,6 @@
   .bgrp button{padding:4px 10px; font-size:12px}
   .bgrp button.on{background:var(--accent); border-color:var(--accent); color:#04121f; font-weight:600}
   .bsep{width:1px; height:18px; background:var(--line)}
-  #bExplode{width:120px; accent-color:var(--accent); padding:0}
   .bstat{color:var(--muted); font:11px/1 ui-monospace,SFMono-Regular,Consolas,monospace;
     white-space:nowrap}
 
@@ -351,14 +350,10 @@
 </main>
 
 <!-- 3D building view. The renderer mounts into #bStage; the bar owns
-     everything outside it (floor filter, explode, readout). -->
+     everything outside it (floor filter, readout). -->
 <section id="building">
   <div id="bBar">
     <span class="bgrp" id="bFloors"></span>
-    <span class="bsep"></span>
-    <label class="bgrp" title="Pull the floors apart to see inside">
-      Explode <input type="range" id="bExplode" min="0" max="100" value="26">
-    </label>
     <span class="spacer"></span>
     <span class="bstat" id="bStat"></span>
   </div>
@@ -1508,7 +1503,7 @@ window.addEventListener("resize", () => {
 // building-css3d.js registers itself here. It is one object:
 //
 //     { name, label, bytes,
-//       mount(stageEl), unmount(), update(), setExplode(t), setFloor(id|null) }
+//       mount(stageEl), unmount(), update(), setFloor(id|null) }
 //
 // `update()` runs on every animation frame while the building is on screen;
 // everything else is driven from the bar. The surface is deliberately this
@@ -1533,7 +1528,6 @@ const Renderers = {
     if (!r || r.mounted) return;
     r.mounted = true;
     r.mount($("#bStage"));
-    r.setExplode(+$("#bExplode").value / 100);
     r.setFloor(FLOOR_FILTER);
     this.stat();
   },
@@ -1598,9 +1592,6 @@ function buildBar(){
   for (const f of floors) mk(f.id, f.name, `Isolate ${f.name}`);
   tabs.querySelector("button").classList.add("on");
 
-  $("#bExplode").addEventListener("input", e => {
-    if (Renderers.active) Renderers.active.setExplode(+e.target.value / 100);
-  });
   $("#backBtn").addEventListener("click", showBuilding);
 }
 

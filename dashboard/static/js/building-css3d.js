@@ -18,7 +18,7 @@
  * its own beyond how many pixels a metre is worth on screen.
  *
  * Registers itself as `MG.register(...)`; the shell owns the camera-free bar
- * controls (floor filter, explode, renderer toggle).
+ * controls (floor filter, readout).
  */
 "use strict";
 
@@ -29,18 +29,20 @@ const PX_PER_M   = 13;          // one horizontal metre -> screen px at zoom 1
 const VPM        = 9;           // one VERTICAL metre -> px. Lower than
                                 // PX_PER_M on purpose: at true scale a 4 m
                                 // storey is a sliver next to a 40 m plate.
-const FLOOR_GAP  = [46, 300];   // translateZ between storeys at explode 0..1
+// How far apart the storeys sit. This was a slider; every value below about a
+// third buries the lower floors and every value above it scatters them, so it
+// is now simply fixed at what the slider's midpoint used to give.
+const FLOOR_GAP  = 173;         // px of translateZ between storeys
 const ROOM_Z     = 0.6;         // px a room floats above its floor slab, so
                                 // the two are never coplanar for hit-testing
 const HOVER_LIFT = 10;          // px a room rises under the cursor
 const CLICK_SLOP = 5;           // px of movement still counted as a click
-const LABEL_FADE = [0.06, 0.20]; // explode range over which room labels appear
 
 const state = {
   el: null, scene: null, host: null,
   rooms: new Map(),        // room id -> {el, label, dots: Map, room}
   spin: -34, tilt: 58, zoom: 1,
-  explode: 0.26, floor: null,
+  floor: null,
   hover: null, dirty: true,
 };
 
@@ -224,19 +226,37 @@ const CSS = `
 #b3d .col .lid{border-radius:50%}
 #b3d .col .side{background:linear-gradient(rgba(var(--f),.52), rgba(var(--f),.22))}
 
-/* a statue: two crossed silhouettes read as a volume from any orbit angle */
+/* An exhibit: two crossed silhouettes, so it reads as an object from any orbit
+   angle. The clip-path comes from POSES, set per element. drop-shadow traces
+   the CLIPPED outline (a border would not -- it gets clipped away too), which
+   is what stops a statue dissolving into the glass behind it. */
 #b3d .fig{
   position:absolute; pointer-events:none;
-  background:linear-gradient(rgba(var(--f),.30), rgba(var(--f),.62));
-  clip-path:polygon(30% 0, 70% 0, 62% 52%, 67% 70%, 58% 78%, 57% 87%,
-                    50% 100%, 43% 87%, 42% 78%, 33% 70%, 38% 52%);
+  background:linear-gradient(rgba(var(--f),.92), rgba(var(--f),.52));
+  filter:drop-shadow(0 0 2px rgba(var(--f),.55));
 }
 
-/* wall-mounted: paintings, windows, doors */
+/* ---- mounted on a wall ---- */
+/* a framed picture: gilt frame, and a canvas inset inside it */
 #b3d .art{
-  position:absolute; background:rgba(30,22,12,.55);
-  border:1.5px solid rgba(var(--f),.85);
-  box-shadow:0 0 10px rgba(var(--f),.35);
+  position:absolute; background:rgba(var(--f),.75);
+  border:1px solid rgba(var(--f),.95);
+  box-shadow:0 0 10px rgba(var(--f),.40);
+}
+#b3d .art .canvas{
+  position:absolute; inset:2px;
+  background:linear-gradient(150deg, rgba(58,46,34,.95), rgba(28,22,18,.95));
+}
+/* a carved relief or a hung shield: stone, no canvas */
+#b3d .relief{
+  position:absolute; background:linear-gradient(rgba(var(--f),.34), rgba(var(--f),.16));
+  border:1px solid rgba(var(--f),.60);
+}
+/* a textile hanging: soft, no hard frame */
+#b3d .hanging{
+  position:absolute;
+  background:linear-gradient(rgba(var(--f),.16), rgba(var(--f),.48));
+  border:1px solid rgba(var(--f),.45); border-bottom-width:2px;
 }
 #b3d .door{
   position:absolute; background:rgba(var(--f),.14);
@@ -245,11 +265,6 @@ const CSS = `
 }
 
 /* labels counter-rotate so they always face the viewer */
-/* Labels fade out as the stack closes up. With three storeys compressed you are
-   looking through 12 rooms at once and every caption collides -- and the closed
-   stack is the "here is the building" shot, which wants no labels anyway.
-   Hovering still names the room, and a floor filter forces them back on. */
-#b3d .rlabel, #b3d .fname{opacity:var(--labels, 1); transition:opacity .18s ease}
 #b3d .rlabel{
   position:absolute; left:50%; top:50%; white-space:nowrap; pointer-events:none;
   font-size:11.5px; font-weight:600; color:#e6edf3; text-shadow:0 1px 5px #000c;
@@ -465,43 +480,107 @@ function addRoom(floorEl, room){
   state.rooms.set(room.id, {el: rEl, label, dots, room, last: null});
 }
 
+/* The exhibits.
+ *
+ * A "figure" is two crossed silhouettes standing on a plinth: cheap (two divs)
+ * and, unlike a billboard, it still reads as an object from any orbit angle
+ * because one of the two planes is always near face-on. The silhouette is a
+ * clip-path chosen by `pose`, so a statue looks like a statue and a vase looks
+ * like a vase.
+ *
+ * Remember the plane convention: an upright plane's CSS *top* edge is its base
+ * in world space, so every polygon below runs feet-at-0% to head-at-100%. */
+const POSES = {
+  statue:    "polygon(35% 0, 33% 30%, 38% 48%, 27% 64%, 44% 74%, 40% 80%," +
+             " 43% 96%, 50% 100%, 57% 96%, 60% 80%, 56% 74%, 73% 64%, 62% 48%," +
+             " 67% 30%, 65% 0)",
+  torso:     "polygon(34% 0, 29% 34%, 24% 60%, 31% 82%, 40% 92%," +
+             " 60% 92%, 69% 82%, 76% 60%, 71% 34%, 66% 0)",
+  bust:      "polygon(18% 0, 22% 30%, 42% 46%, 36% 60%, 37% 80%, 44% 94%," +
+             " 56% 94%, 63% 80%, 64% 60%, 58% 46%, 78% 30%, 82% 0)",
+  vase:      "polygon(36% 0, 64% 0, 60% 10%, 74% 30%, 78% 52%, 66% 72%, 60% 84%," +
+             " 70% 92%, 70% 100%, 30% 100%, 30% 92%, 40% 84%, 34% 72%, 22% 52%," +
+             " 26% 30%, 40% 10%)",
+  armour:    "polygon(32% 0, 36% 40%, 26% 50%, 22% 68%, 33% 74%, 40% 86%, 44% 90%," +
+             " 42% 100%, 58% 100%, 56% 90%, 60% 86%, 67% 74%, 78% 68%, 74% 50%," +
+             " 64% 40%, 68% 0)",
+  mannequin: "polygon(20% 0, 26% 30%, 34% 52%, 30% 70%, 38% 86%," +
+             " 62% 86%, 70% 70%, 66% 52%, 74% 30%, 80% 0)",
+  crown:     "polygon(22% 0, 78% 0, 78% 34%, 68% 38%, 72% 100%, 60% 50%," +
+             " 50% 96%, 40% 50%, 28% 100%, 32% 38%, 22% 34%)",
+  gem:       "polygon(50% 0, 84% 58%, 74% 84%, 26% 84%, 16% 58%)",
+};
+
+/** Two crossed silhouettes of height `h` standing at (x, y, z). */
+function figure(parent, {x, y, z = 0, w, h, pose, colour}){
+  const shape = POSES[pose] || POSES.statue;
+  for (const axis of ["x", "y"]){
+    const p = plane(parent, "fig", {
+      x: axis === "x" ? x - w / 2 : x,
+      y: axis === "x" ? y : y - w / 2,
+      z, len: w, h, axis,
+    });
+    p.style.setProperty("--f", rgb(colour));
+    p.style.clipPath = shape;
+  }
+}
+
 /** One piece of furniture, in the format building.furnish() emits. */
 function addFixture(rEl, walls, fx){
   switch (fx.t){
+    // ---- mounted on a wall ----
     case "painting":
+    case "relief":
+    case "hanging":
     case "window":
     case "door": {
       const host = walls[fx.wall];
       if (!host) return;
-      const d = el(fx.t === "door" ? "door" : "art", host);
+      const cls = fx.t === "door" ? "door"
+                : fx.t === "relief" ? "relief"
+                : fx.t === "hanging" ? "hanging" : "art";
+      const d = el(cls, host);
       d.style.setProperty("--f", rgb(fx.c));
       d.style.left   = ((fx.at - fx.w / 2) * PX_PER_M) + "px";
       d.style.top    = ((fx.sill || 0) * VPM) + "px";
       d.style.width  = (fx.w * PX_PER_M) + "px";
       d.style.height = (fx.h * VPM) + "px";
+      if (cls === "art") el("canvas", d);      // the picture inside the frame
       return;
     }
-    case "case":
+
+    // ---- a vitrine, optionally with something in it ----
+    case "case": {
       box(rEl, "case", {x: fx.x, y: fx.y, w: fx.w, d: fx.d, h: fx.h, colour: fx.c});
+      if (!fx.holds) return;
+      const base = fx.h * 0.16;
+      const inner = Math.min(fx.w, fx.d) * 0.42;
+      box(rEl, "plinth", {x: fx.x, y: fx.y, w: inner * 1.5, d: inner * 1.5,
+                          h: base, colour: "#8d9aa8"});
+      if (fx.holds === "blade"){                // a sword lies flat, not stands
+        box(rEl, "blk", {x: fx.x, y: fx.y, z: base, w: fx.w * 0.7,
+                         d: fx.d * 0.12, h: fx.h * 0.08, colour: "#c8d4e2"});
+        return;
+      }
+      figure(rEl, {x: fx.x, y: fx.y, z: base, w: inner,
+                   h: fx.h * 0.62, pose: fx.holds, colour: "#e5c76b"});
       return;
+    }
+
+    // ---- an exhibit standing on the floor ----
+    case "figure": {
+      const base = fx.h * 0.17;
+      box(rEl, "plinth", {x: fx.x, y: fx.y, w: fx.w, d: fx.d, h: base,
+                          colour: "#8d9aa8"});
+      figure(rEl, {x: fx.x, y: fx.y, z: base, w: fx.w * 0.86,
+                   h: fx.h - base, pose: fx.pose, colour: fx.c});
+      return;
+    }
+
     case "column":
       box(rEl, "col", {x: fx.x, y: fx.y, w: fx.w, d: fx.d, h: fx.h, colour: fx.c});
       return;
-    case "statue": {
-      // a low plinth with two crossed silhouettes standing on it
-      const base = fx.h * 0.26;
-      box(rEl, "plinth", {x: fx.x, y: fx.y, w: fx.w, d: fx.d, h: base, colour: fx.c});
-      const fh = fx.h - base, fw = fx.w * 0.8;
-      for (const axis of ["x", "y"]){
-        const p = plane(rEl, "fig", {
-          x: axis === "x" ? fx.x - fw / 2 : fx.x,
-          y: axis === "x" ? fx.y : fx.y - fw / 2,
-          z: base, len: fw, h: fh, axis,
-        });
-        p.style.setProperty("--f", rgb(fx.c));
-      }
-      return;
-    }
+
     default:
       box(rEl, "blk", {x: fx.x, y: fx.y, w: fx.w, d: fx.d, h: fx.h, colour: fx.c});
   }
@@ -578,14 +657,7 @@ function bindCamera(){
 }
 
 function applyCamera(){
-  const gap = FLOOR_GAP[0] + (FLOOR_GAP[1] - FLOOR_GAP[0]) * state.explode;
-
-  // isolating one floor removes the collisions, so labels stay up regardless
-  const labels = state.floor !== null
-    ? 1
-    : Math.max(0, Math.min(1, (state.explode - LABEL_FADE[0]) /
-                              (LABEL_FADE[1] - LABEL_FADE[0])));
-  state.el.style.setProperty("--labels", labels.toFixed(3));
+  const gap = FLOOR_GAP;
   state.scene.style.transform =
     `scale(${state.zoom}) rotateX(${state.tilt}deg) rotateZ(${state.spin}deg)`;
 
@@ -649,7 +721,6 @@ MG.register({
     document.getElementById("bTip").style.display = "none";
   },
   update,
-  setExplode(t){ state.explode = t; state.dirty = true; },
   setFloor(id){ state.floor = id; state.dirty = true; },
 });
 
