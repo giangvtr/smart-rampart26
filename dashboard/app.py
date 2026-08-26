@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
 )
 from pyqtgraph.dockarea import Dock, DockArea
 
+import anomaly
 import config
 from panels import AlarmBanner, ControlPanel, LoginDialog, SensorPanel, StatusPanel
 from security import Session
@@ -67,6 +68,8 @@ class MainWindow(QMainWindow):
         self.storage = Storage()
         self.session = Session()
         self.source = make_source()
+        # same engine the web dashboard uses -- see anomaly.py
+        self.detector = anomaly.AnomalyEngine()
         self._connected = False
         self._last_seen: dict[str, float] = {}
 
@@ -174,6 +177,19 @@ class MainWindow(QMainWindow):
         self._last_seen[reading.key] = time.time()
         prev_state = self.storage.record_reading(reading)
         self.status_panel.update_sensor(reading.key, reading.value, reading.state)
+
+        for record in self.detector.feed(reading):
+            panel = self.sensor_panels.get(record["key"])
+            if panel is not None:
+                # hand over every window for this sensor, not just the changed
+                # one -- the panel redraws its whole overlay each refresh
+                panel.set_anomalies([a for a in self.detector.recent(60)
+                                     if a["key"] == record["key"]])
+            if not record["open"]:
+                self._log(f"ANOMALY [{record['zone']}·{record['label']}] "
+                          f"{record['kindLabel']} ({record['severity']}) — "
+                          f"{record['message']}")
+
         if prev_state is not None:
             self._log(
                 f"[{reading.zone}·{reading.sensor}] {prev_state} -> {reading.state}"

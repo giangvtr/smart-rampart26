@@ -31,6 +31,10 @@ def _qcolor(state: str) -> QColor:
     return QColor(config.STATE_COLORS.get(state, "#888888"))
 
 
+# anomaly severities, warmest = worst (kept in step with the web UI's palette)
+_SEVERITY_COLORS = {"LOW": "#d29922", "MEDIUM": "#db6d28", "HIGH": "#f85149"}
+
+
 # --------------------------------------------------------------------------
 # One live sensor plot
 # --------------------------------------------------------------------------
@@ -71,6 +75,12 @@ class SensorPanel(QWidget):
         self._add_threshold_bands()
         root.addWidget(self.plot)
 
+        # Anomaly windows shaded behind the trace. The x-axis is seconds-ago,
+        # so every region has to be re-placed on each refresh -- they are held
+        # in a reused pool rather than rebuilt, which would thrash the scene.
+        self._anomalies: list[dict] = []
+        self._anom_items: list[pg.LinearRegionItem] = []
+
         self.setMinimumHeight(140)
         self._apply_state_style(config.STATE_DISCONNECTED)
 
@@ -109,6 +119,28 @@ class SensorPanel(QWidget):
             if whigh is not None:
                 band(whigh, ahigh, warn_c)
 
+    def set_anomalies(self, records: list) -> None:
+        """Replace the anomaly windows shaded on this plot (see anomaly.py)."""
+        self._anomalies = records
+
+    def _refresh_anomalies(self, now: float, oldest: float) -> None:
+        """Re-place the shaded regions for the anomalies still on screen."""
+        visible = [a for a in self._anomalies if a["t1"] - now >= oldest]
+        while len(self._anom_items) < len(visible):
+            item = pg.LinearRegionItem(values=(0, 0), movable=False)
+            item.setZValue(-9)              # over the threshold bands, under the trace
+            self.plot.addItem(item)
+            self._anom_items.append(item)
+
+        for item, a in zip(self._anom_items, visible):
+            color = QColor(_SEVERITY_COLORS.get(a["severity"], "#d29922"))
+            color.setAlpha(55)
+            item.setBrush(pg.mkBrush(color))
+            item.setRegion((a["t0"] - now, a["t1"] - now))
+            item.show()
+        for item in self._anom_items[len(visible):]:
+            item.hide()
+
     def _selected_window_s(self):
         return config.TIME_SCALES[self.scale_combo.currentIndex()][1]
 
@@ -125,6 +157,7 @@ class SensorPanel(QWidget):
             self.plot.setXRange(rel[0], 0, padding=0.02)
         else:
             self.plot.setXRange(-window, 0, padding=0.02)
+        self._refresh_anomalies(now, rel[0] if window is None else -window)
 
         state = self.buffer.last_state or config.STATE_OK
         last = self.buffer.last_value
