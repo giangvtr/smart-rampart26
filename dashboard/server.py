@@ -40,30 +40,38 @@ import config
 import security
 from core import Command
 from storage import Storage
-from transports import SerialSource, SimulatedSource  # noqa: F401 (SerialSource for the swap)
+from transports import HttpIngestSource, SerialSource, SimulatedSource  # noqa: F401 (alt sources for the swap)
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 SESSION_COOKIE = "mg_session"  # gates page/bootstrap/stream access (viewer or guard)
 
 
-def make_source():
+def make_source(name: str = "http"):
     """The single swap-point for how data reaches the dashboard.
 
-    Default: SimulatedSource (no hardware). For the real Arduino over USB or
-    Bluetooth-Classic, comment the first line and use the second (set the port
-    in config.py). WiFi/BLE stubs live in transports.py.
+    Chosen at launch with --source (default "http"):
+
+      http   HttpIngestSource -- the real ESP32 path: nodes POST readings to
+             /api/ingest over WiFi and pick up commands on the same reply.
+      sim    SimulatedSource  -- fake data, no hardware (for a quick demo/test).
+      serial SerialSource     -- USB / Bluetooth-Classic Arduino (port in config.py).
+
+    BLE stubs live in transports.py.
     """
-    return SimulatedSource()
-    # return SerialSource(port=config.SERIAL_PORT, baud=config.SERIAL_BAUD)
+    if name == "sim":
+        return SimulatedSource()
+    if name == "serial":
+        return SerialSource(port=config.SERIAL_PORT, baud=config.SERIAL_BAUD)
+    return HttpIngestSource()
 
 
 # --------------------------------------------------------------------------
 # Hub: owns the source + storage, fans events out to connected browsers
 # --------------------------------------------------------------------------
 class Hub:
-    def __init__(self):
+    def __init__(self, source_name: str = "http"):
         self.storage = Storage()
-        self.source = make_source()
+        self.source = make_source(source_name)
         # Learns each stream's normal and flags the windows that break it. It
         # lives here rather than in the browser so every tab sees the same
         # verdicts, and so one opened late still gets what it missed.
@@ -221,6 +229,15 @@ class Hub:
         self._log(f"AUDIT: {user} issued {action} {zone}.{sensor}")
         return True
 
+    def ingest(self, payload: dict) -> str:
+        """Feed one ESP32 POST body into the HTTP source (if that transport is
+        active) and return the command string to hand back on the reply."""
+        fn = getattr(self.source, "ingest", None)
+        if fn is None:
+            # Some other transport is active (sim/serial); accept but no-op.
+            return "AUTO"
+        return fn(payload)
+
 
 HUB: Hub | None = None
 
@@ -330,6 +347,16 @@ class Handler(BaseHTTPRequestHandler):
             if ok:
                 return self._send_json({"ok": True})
             return self._send_json({"ok": False, "error": "Guard login required"}, 403)
+        if path == "/api/ingest":
+            # ESP32 zone node -> readings in; pending command rides back on the
+            # reply (no inbound connection to the node is ever opened). No login:
+            # the nodes are unauthenticated devices on the LAN, like a sensor bus.
+            # Deliberately NOT behind the viewer cookie gate -- that gate is for
+            # browsers, and the firmware carries no session.
+            if not data or "zone" not in data:
+                return self._send_json({"error": "expected JSON with a 'zone'"}, 400)
+            cmd = HUB.ingest(data)
+            return self._send_json({"ok": True, "cmd": cmd})
         self._send_json({"error": "not found"}, 404)
 
     # -- static files -----------------------------------------------------
@@ -378,13 +405,17 @@ def main() -> int:
     # do not expose this beyond the demo machine without TLS in front of it.
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8000)
+    parser.add_argument("--source", choices=["http", "sim", "serial"], default="http",
+                        help="data source: http=ESP32 WiFi (default), "
+                             "sim=fake data no hardware, serial=USB/Bluetooth Arduino")
     args = parser.parse_args()
 
-    HUB = Hub()
+    HUB = Hub(args.source)
     HUB.start()
     httpd = ThreadingHTTPServer((args.host, args.port), Handler)
     httpd.daemon_threads = True
-    print(f"{config.APP_NAME} web dashboard -> http://{args.host}:{args.port}")
+    print(f"{config.APP_NAME} web dashboard -> http://{args.host}:{args.port}"
+          f"  [source: {args.source}]")
     print("Press Ctrl+C to stop.")
     try:
         httpd.serve_forever()

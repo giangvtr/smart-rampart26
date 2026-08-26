@@ -76,6 +76,14 @@ SENSORS = [
               detect_anomalies=False),
     SensorDef("BASEMENT.WATER",   "BASEMENT", "Water level", "adc",
               warn=(None, 100), alarm=(None, 300), vmin=0, vmax=600, latched=True, period_s=2.0),
+    SensorDef("BASEMENT.TEMP",     "BASEMENT", "Temperature", "°C",
+              warn=(18, 26), alarm=(15, 30), vmin=10, vmax=40, period_s=3.0),
+    SensorDef("BASEMENT.HUMIDITY", "BASEMENT", "Humidity",    "%RH",
+              warn=(40, 60), alarm=(30, 70), vmin=20, vmax=90, period_s=3.0),
+    # Fire: potentiometer stand-in (0..100). Upper danger bound only; latched so
+    # a detected fire stays in ALARM until an explicit reset/override.
+    SensorDef("BASEMENT.FIRE",     "BASEMENT", "Fire",        "idx",
+              warn=(None, 50), alarm=(None, 70), vmin=0, vmax=100, latched=True, period_s=3.0),
 ]
 
 SENSORS_BY_KEY = {s.key: s for s in SENSORS}
@@ -84,6 +92,42 @@ ZONES = sorted({s.zone for s in SENSORS})
 
 def sensor_lookup(zone: str, sensor: str) -> SensorDef | None:
     return SENSORS_BY_KEY.get(f"{zone}.{sensor}")
+
+
+# --------------------------------------------------------------------------
+# ESP32 HTTP-ingest mapping (WiFi path)
+# --------------------------------------------------------------------------
+# The ESP32 firmware posts one JSON blob per node using short zone ids and its
+# own field names. HttpIngestSource fans that blob out into canonical per-sensor
+# Readings using the two maps below, so the firmware wire format stays simple
+# while the dashboard still sees the GALLERY.TEMP / BASEMENT.WATER model.
+
+# short firmware zone id -> canonical zone (pass-through if already canonical)
+ZONE_ALIASES = {
+    "GAL01": "GALLERY",
+    "GALLERY": "GALLERY",
+    "BASE01": "BASEMENT",
+    "BASEMENT": "BASEMENT",
+}
+
+# JSON field in the POST body -> canonical SENSOR token. Fields not listed
+# (e.g. "air", "state", "zone") are ignored by the fan-out.
+FIELD_TO_SENSOR = {
+    "temp": "TEMP",
+    "temperature": "TEMP",
+    "humidity": "HUMIDITY",
+    "light": "LIGHT",
+    "motion": "MOTION",
+    "water": "WATER",
+    "level": "WATER",
+    "fire": "FIRE",
+    "pot": "FIRE",
+}
+
+
+def canonical_zone(zone: str) -> str:
+    z = str(zone).strip().upper()
+    return ZONE_ALIASES.get(z, z)
 
 
 # --------------------------------------------------------------------------

@@ -3,7 +3,9 @@ Transport adapters: turn some link into a stream of canonical `Reading`s and
 accept `Command`s back. Each is a thin `core.Source` implementation.
 
 Built now : SimulatedSource (no hardware), SerialSource (USB *and*
-            Bluetooth-Classic -- both are COM ports on Windows).
+            Bluetooth-Classic -- both are COM ports on Windows),
+            HttpIngestSource (ESP32 over WiFi -- POST readings in, command out
+            on the same reply; fed by the /api/ingest route in server.py).
 Stubbed   : WebSocketSource (WiFi/ESP), BleSource (HM-10 BLE) -- real extension
             points that already satisfy the interface; fill in when needed.
 
@@ -53,20 +55,31 @@ class SimulatedSource(Source):
     ALARM until a RESET command (or, for motion, a DISARM) clears them.
     """
 
+    # resting value each stream wanders around; anything not listed starts
+    # mid-range (see __init__)
+    BASE_SEEDS = {
+        "GALLERY.TEMP": 21.0,
+        "GALLERY.HUMIDITY": 50.0,
+        "GALLERY.LIGHT": 300.0,
+        "GALLERY.MOTION": 0.0,
+        "BASEMENT.WATER": 40.0,
+        "BASEMENT.TEMP": 19.0,
+        "BASEMENT.HUMIDITY": 52.0,
+        "BASEMENT.FIRE": 8.0,      # 0..100 index; alarms above 70
+    }
+
     def __init__(self, codec: Codec | None = None, parent=None):
         super().__init__(codec, parent)
         self._thread: threading.Thread | None = None
         self._running = False
         self._armed = True                    # security sub-state (ARMED at night)
         self._latched: dict[str, bool] = {}   # sensor.key -> latched-in-alarm
-        # smooth baselines per sensor for a natural wander
-        self._base = {
-            "GALLERY.TEMP": 21.0,
-            "GALLERY.HUMIDITY": 50.0,
-            "GALLERY.LIGHT": 300.0,
-            "GALLERY.MOTION": 0.0,
-            "BASEMENT.WATER": 40.0,
-        }
+        # Smooth baselines per sensor for a natural wander. Built from
+        # config.SENSORS rather than hard-coded, so adding a sensor there does
+        # not need an edit here (it starts mid-range); BASE_SEEDS just gives the
+        # known ones a more plausible resting point than the midpoint.
+        self._base = {s.key: self.BASE_SEEDS.get(s.key, (s.vmin + s.vmax) / 2.0)
+                      for s in config.SENSORS}
         self._next_sample: dict[str, float] = {}
 
     # -- Source interface --------------------------------------------------
@@ -274,3 +287,184 @@ class BleSource(Source):
 
     def send_command(self, cmd: Command) -> None:
         self.notice.emit("BleSource stub: command ignored.")
+
+
+# --------------------------------------------------------------------------
+# HTTP ingest source -- ESP32 over WiFi (POST readings in, command out on reply)
+# --------------------------------------------------------------------------
+class HttpIngestSource(Source):
+    """WiFi transport for the ESP32 zone nodes.
+
+    Unlike the serial sources, this one does not own a link it reads from -- the
+    ESP32 is an HTTP *client* that POSTs to us. The /api/ingest route in
+    server.py drives this source:
+
+        route --ingest(payload)--> emits Readings, returns pending cmd string
+        Hub   --send_command()---> queues a command for the node's next reply
+
+    That is the firmware's "command rides back on the POST reply" pattern: we
+    never open a connection *to* the ESP32, so it works behind NAT and in Wokwi.
+
+    Latching + arming live here (server-side), mirroring SimulatedSource and the
+    firmware FSM: water/motion stay in ALARM until a RESET (or DISARM for
+    motion), even after the raw value recovers. A watchdog marks a silent node
+    DISCONNECTED after HEARTBEAT_TIMEOUT_S instead of showing stale data as live.
+    """
+
+    HEARTBEAT_TIMEOUT_S = 6.0   # 3 missed 2s cycles (spec FR-NET-4)
+
+    def __init__(self, codec: Codec | None = None, parent=None):
+        super().__init__(codec or JsonCodec(), parent)
+        self._armed = True
+        self._latched: dict[str, bool] = {}       # sensor.key -> latched-in-alarm
+        self._pending: dict[str, list[str]] = {}  # canonical zone -> queued actions
+        self._last_seen: dict[str, float] = {}    # canonical zone -> ts
+        self._disconnected: set[str] = set()      # zones currently marked offline
+        self._lock = threading.Lock()
+        self._running = False
+        self._thread: threading.Thread | None = None
+        # Link state as last reported to the Hub. Kept explicit (rather than
+        # derived on the fly) so the up/down edge is emitted exactly once.
+        self._link_up = False
+
+    # -- Source interface --------------------------------------------------
+    def start(self) -> None:
+        if self._running:
+            return
+        self._running = True
+        # Link is "down" until the first node checks in.
+        self.connection_changed.emit(False)
+        self.notice.emit("HTTP ingest ready -- waiting for ESP32 POSTs on /api/ingest.")
+        self._thread = threading.Thread(target=self._watchdog, daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._running = False
+        if self._thread:
+            self._thread.join(timeout=1.0)
+        self._link_up = False
+        self.connection_changed.emit(False)
+
+    def send_command(self, cmd: Command) -> None:
+        """Called by the Hub when an agent clicks a control. Apply it to the
+        server-side FSM immediately, then queue it for delivery on the target
+        node's next POST reply."""
+        action = cmd.action.upper()
+        if action == "DISARM":
+            self._armed = False
+            self._latched["GALLERY.MOTION"] = False
+            self.notice.emit("System DISARMED (alarms suppressed for maintenance).")
+            self._queue_all("DISARM")
+        elif action == "ARM":
+            self._armed = True
+            self.notice.emit("System ARMED.")
+            self._queue_all("ARM")
+        elif action == "RESET":
+            key = f"{config.canonical_zone(cmd.zone)}.{cmd.sensor}"
+            self._latched[key] = False
+            self.notice.emit(f"Latched alarm cleared: {key}.")
+            self._queue(config.canonical_zone(cmd.zone), "RESET")
+        else:
+            self._queue(config.canonical_zone(cmd.zone), action)
+
+    # -- called by the /api/ingest route ----------------------------------
+    def ingest(self, payload: dict) -> str:
+        """Fan one ESP32 JSON blob out into per-sensor Readings and return the
+        command string (AUTO / ARM / DISARM / RESET) for this node's reply."""
+        zone = config.canonical_zone(payload.get("zone", ""))
+        if not zone:
+            return "AUTO"
+
+        now = time.time()
+        with self._lock:
+            self._last_seen[zone] = now
+            was_off = zone in self._disconnected
+            self._disconnected.discard(zone)
+            # Any node checking in means the link is up again -- not just the
+            # very first one ever, or a zone that recovers after a heartbeat
+            # gap would leave the header stuck on DISCONNECTED for good.
+            came_up = not self._link_up
+            self._link_up = True
+        if came_up:
+            self.connection_changed.emit(True)
+        if was_off:
+            self.notice.emit(f"Zone {zone} reconnected.")
+
+        for field, raw in payload.items():
+            sensor = config.FIELD_TO_SENSOR.get(str(field).lower())
+            if sensor is None:
+                continue
+            try:
+                value = float(raw)
+            except (TypeError, ValueError):
+                continue
+            self._emit_sensor(zone, sensor, value)
+
+        return self._next_command(zone)
+
+    # -- internals ---------------------------------------------------------
+    def _emit_sensor(self, zone: str, sensor: str, value: float) -> None:
+        sdef = config.sensor_lookup(zone, sensor)
+        if sdef is None:
+            return
+        key = sdef.key
+
+        if sensor == "MOTION":
+            triggered = self._armed and value >= 0.5
+            if triggered:
+                self._latched[key] = True
+            latched = self._latched.get(key, False) and self._armed
+            out_value = 1.0 if latched else 0.0
+            state = config.STATE_ALARM if latched else config.STATE_OK
+            self.reading_received.emit(Reading(zone, sensor, out_value, state))
+            return
+
+        state = classify(sdef, value)
+        if sdef.latched:
+            if state == config.STATE_ALARM:
+                self._latched[key] = True
+            if self._latched.get(key, False):
+                state = config.STATE_ALARM
+        self.reading_received.emit(Reading(zone, sensor, round(value, 1), state))
+
+    def _queue(self, zone: str, action: str) -> None:
+        with self._lock:
+            self._pending.setdefault(zone, []).append(action)
+
+    def _queue_all(self, action: str) -> None:
+        for z in config.ZONES:
+            self._queue(z, action)
+
+    def _next_command(self, zone: str) -> str:
+        with self._lock:
+            q = self._pending.get(zone)
+            if q:
+                return q.pop(0)
+        return "AUTO"
+
+    def _watchdog(self) -> None:
+        """Mark a node DISCONNECTED (and recolour its sensors) when its heartbeat
+        stops, so the UI never shows stale data as if it were live."""
+        while self._running:
+            time.sleep(1.0)
+            now = time.time()
+            with self._lock:
+                stale_zones = [
+                    z for z, ts in self._last_seen.items()
+                    if now - ts > self.HEARTBEAT_TIMEOUT_S and z not in self._disconnected
+                ]
+                for z in stale_zones:
+                    self._disconnected.add(z)
+                all_off = self._link_up and self._last_seen and all(
+                    z in self._disconnected for z in self._last_seen
+                )
+                if all_off:
+                    self._link_up = False
+            for z in stale_zones:
+                self.notice.emit(f"Zone {z} heartbeat lost -- marking DISCONNECTED.")
+                for sdef in config.SENSORS:
+                    if sdef.zone == z:
+                        self.reading_received.emit(
+                            Reading(z, sdef.sensor, 0.0, config.STATE_DISCONNECTED))
+            if all_off:
+                self.connection_changed.emit(False)

@@ -1,13 +1,14 @@
 # MuseumGuard — Dashboard
 
-Monitoring station for the MuseumGuard sensor rig (temp/humidity, light, water
-level, motion across a Gallery + Basement zone). Live charts in floating,
-snappable windows — or a phone-friendly **Simple** board of colour-coded value
-boxes — colour-coded alarm states, a flashing alarm banner, login-gated alarm
-override/disarm, and zero-install local logging.
+Monitoring station for the MuseumGuard sensor rig (temp/humidity, light, motion
+in the Gallery; water level, temp/humidity and fire in the Basement). Live charts
+in floating, snappable windows — or a phone-friendly **Simple** board of
+colour-coded value boxes — colour-coded alarm states, a flashing alarm banner,
+a full-screen fire alert, login-gated alarm override/disarm, and zero-install
+local logging.
 
-Runs today against a built-in **simulator** (no hardware needed); swaps to a real
-Arduino over USB/Bluetooth by changing one line.
+Talks to the real **ESP32 zone nodes over WiFi** out of the box; `--source sim`
+falls back to a built-in simulator with no hardware at all.
 
 ## Status
 
@@ -21,10 +22,17 @@ Working end to end, on simulated data:
 - ✅ Two-tier PBKDF2 login: a `viewer` password gates the dashboard itself, a
   separate `guard` password gates the override/disarm controls.
 - ✅ Login attempts are rate-limited per IP (5 fails → 5 min lockout).
+- ✅ `HttpIngestSource` (**WiFi / ESP32**) — the default source. ESP32 zone
+  nodes POST readings to `/api/ingest`; the pending override rides back on the
+  same reply (no inbound connection to the node, so it works behind NAT and in
+  Wokwi). Server-side latching, ARM/DISARM gating, and a 6 s heartbeat watchdog
+  live in the source. See *Connecting the ESP32 over WiFi* below.
+- ✅ Full-screen **fire alert** on `BASEMENT.FIRE` going ALARM, with an
+  acknowledge button that disarms (silences) the node.
 - 🔌 `SerialSource` (USB / Bluetooth-Classic) is written but **not yet run
-  against real firmware** — it is the one-line swap in `make_source()`.
-- 🚧 `WebSocketSource` (WiFi/ESP) and `BleSource` (HM-10 BLE) are deliberate
-  stubs: they emit a notice and nothing else.
+  against real firmware** — select it with `--source serial`.
+- 🚧 `WebSocketSource` (push WebSocket) and `BleSource` (HM-10 BLE) remain
+  deliberate stubs; the WiFi path above uses plain HTTP POST instead.
 - 🚧 HMAC frame authentication for the radio link is designed and documented
   below, but **not wired in** — see *Security notes*.
 
@@ -56,7 +64,11 @@ Uses only the Python standard library: no Flask/FastAPI, no npm, no CDN. The
 charts are drawn on plain `<canvas>` with **no charting library**, so it works
 with no internet at the venue. Live data arrives over Server-Sent Events.
 
-Options: `python server.py --port 9000 --host 0.0.0.0`
+Options: `python server.py --port 9000 --host 0.0.0.0 --source sim`
+
+`--source` picks where readings come from — `http` (default: real ESP32 over
+WiFi), `sim` (fake data, no hardware), or `serial` (USB/Bluetooth Arduino, port
+in `config.py`). Nothing in the code needs editing to switch.
 
 You'll land on a sign-in page first — that's the `viewer` gate (see *Demo
 login* below). Signing in sets a cookie; the dashboard itself opens after.
@@ -73,7 +85,8 @@ python app.py          # from the dashboard/ folder
 # or, from the repo root:  python -m dashboard.app
 ```
 
-A window opens streaming simulated data. No Arduino required. The desktop UI
+A window opens streaming simulated data (the desktop app always uses the
+simulator — `make_source()`'s default). No Arduino required. The desktop UI
 has no sign-in page of its own — it opens straight into monitoring, and the
 `guard` login gates the override controls (see below).
 
@@ -163,6 +176,34 @@ Common to both:
 - A **CONNECTED / DISCONNECTED** indicator; a dropped link marks sensors
   DISCONNECTED instead of showing stale data as if live.
 
+## Connecting the ESP32 over WiFi (default)
+
+`server.py` runs `--source http` out of the box, so it is ready for the ESP32
+nodes with no change:
+
+1. Run `python server.py --host 0.0.0.0` so the nodes (on the same WiFi) can
+   reach the laptop. Note the laptop's LAN IP.
+2. Point each node's `SERVER` at `http://<laptop-ip>:8000/api/ingest`
+   (see `esp32_node/esp32_node.ino` and `WINDOWS/main.py`).
+3. Each node POSTs one JSON blob per cycle; the server **fans it out** into the
+   per-sensor model using `ZONE_ALIASES` + `FIELD_TO_SENSOR` in `config.py`:
+
+   ```json
+   {"zone": "GAL01", "temp": 21.4, "humidity": 50, "light": 300, "state": "OK"}
+   ```
+
+   `GAL01`→`GALLERY`, `BASE01`→`BASEMENT`, `temp`→`TEMP`, `pot`/`fire`→`FIRE`,
+   `water`/`level`→`WATER`, etc. Unmapped fields (e.g. `air`) are ignored. The
+   reply carries the pending command: `{"ok": true, "cmd": "RESET"}` (one of
+   `AUTO`/`OFF`/`ARM`/`DISARM`/`RESET`), which the firmware acts on.
+
+`/api/ingest` is **not** behind the `viewer` cookie gate — that gate is for
+browsers, and the firmware carries no session. The nodes are treated as
+unauthenticated devices on the LAN, like a sensor bus; see *Security notes —
+is the Arduino ↔ laptop link safe?* for what that does and does not buy you.
+
+To demo without hardware, add `--source sim`.
+
 ## Connecting a real Arduino (USB or Bluetooth)
 
 0. `pip install -r requirements.txt` — pulls in `pyserial` (the web UI needs
@@ -170,9 +211,9 @@ Common to both:
 1. Set `SERIAL_PORT` / `SERIAL_BAUD` in `config.py` (on Windows a paired HC-05/06
    Bluetooth module appears as an outgoing **COM port**, so the same code path
    handles USB *and* Bluetooth-Classic — only the port name differs).
-2. In `make_source()` — in `server.py` for the web UI, or `app.py` for the
-   desktop UI — comment the `SimulatedSource()` line and uncomment the
-   `SerialSource(...)` line.
+2. Start the web UI with `python server.py --source serial`. (The desktop UI
+   has no flag: swap the `SimulatedSource()` line in `app.py`'s `make_source()`
+   for the `SerialSource(...)` one.)
 3. Firmware should emit one line per reading:
    `ZONE,SENSOR,VALUE,STATE,TIMESTAMP\n`
    e.g. `BASEMENT,WATER,340,ALARM,00:14:02`. The dashboard sends commands back as
@@ -190,10 +231,12 @@ decision that never touches the UI:
   `Codec` interfaces (with `LineCodec` CSV and `JsonCodec`). The whole app imports
   only from here. Deliberately has **no GUI-framework dependency** (its `Event` is
   a plain observer, not a Qt signal) so both frontends share it.
-- **`transports.py`** — adapters: `SimulatedSource`, `SerialSource` (USB +
-  Bluetooth-Classic). `WebSocketSource` (WiFi/ESP) and `BleSource` (HM-10 BLE) are
-  ready stubs — adding a transport is one small adapter, no UI changes.
-- **`config.py`** — sensors, thresholds, colours, timing, ports.
+- **`transports.py`** — adapters: `HttpIngestSource` (WiFi/ESP32, the default),
+  `SimulatedSource`, `SerialSource` (USB + Bluetooth-Classic). `WebSocketSource`
+  (push WebSocket) and `BleSource` (HM-10 BLE) are ready stubs — adding a
+  transport is one small adapter, no UI changes.
+- **`config.py`** — sensors, thresholds, colours, timing, ports, and the
+  `ZONE_ALIASES` / `FIELD_TO_SENSOR` maps for the ESP32 wire format.
 - **`storage.py`** — SQLite + daily CSV logging + in-memory plot buffers.
 - **`security.py`** — PBKDF2 login, roles, per-IP rate limiting (+ documented
   link-auth upgrade path).
