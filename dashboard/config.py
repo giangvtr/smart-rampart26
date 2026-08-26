@@ -93,7 +93,7 @@ def sensor_lookup(zone: str, sensor: str) -> SensorDef | None:
 # period, 7200 points ~= 1 hour.
 RING_BUFFER_POINTS = 7200
 
-# time-scale presets for the per-panel combo box: (label, seconds or None=all)
+# time-scale presets for the per-panel time-scale selector: (label, seconds or None=all)
 TIME_SCALES = [
     ("30 s", 30),
     ("2 min", 120),
@@ -103,8 +103,8 @@ TIME_SCALES = [
 ]
 DEFAULT_TIME_SCALE_INDEX = 1  # "2 min"
 
-UI_REFRESH_MS = 250     # plot repaint cadence
-BANNER_FLASH_MS = 500   # alarm banner flash cadence
+UI_REFRESH_MS = 250     # plot repaint cadence (desktop UI)
+BANNER_FLASH_MS = 500   # alarm banner flash cadence (desktop UI)
 
 # --------------------------------------------------------------------------
 # Anomaly detection (see anomaly.py)

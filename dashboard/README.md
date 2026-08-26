@@ -16,7 +16,9 @@ Working end to end, on simulated data:
 - ✅ Desktop UI (PySide6 + pyqtgraph docks) — feature-equivalent.
 - ✅ Simulator with latching water/motion alarms that honour ARM/DISARM/RESET.
 - ✅ SQLite + daily CSV logging, audit trail for logins and overrides.
-- ✅ PBKDF2 login gate on the override controls.
+- ✅ Two-tier PBKDF2 login: a `viewer` password gates the dashboard itself, a
+  separate `guard` password gates the override/disarm controls.
+- ✅ Login attempts are rate-limited per IP (5 fails → 5 min lockout).
 - 🔌 `SerialSource` (USB / Bluetooth-Classic) is written but **not yet run
   against real firmware** — it is the one-line swap in `make_source()`.
 - 🚧 `WebSocketSource` (WiFi/ESP) and `BleSource` (HM-10 BLE) are deliberate
@@ -31,13 +33,13 @@ Pick whichever you prefer — they share the same engine and the same database:
 | | Web (recommended) | Desktop |
 |---|---|---|
 | Run | `python server.py` → http://127.0.0.1:8000 | `python app.py` |
-| UI files | `server.py` + `static/index.html` | `app.py` + `panels.py` |
+| UI files | `server.py` + `static/index.html` (+ `static/login.html`) | `app.py` + `panels.py` |
 | Dependencies | **none** (stdlib only) | PySide6 + pyqtgraph |
 | Graph controls | wheel-zoom, drag-pan, live/pause, hover readout | pan/zoom via pyqtgraph |
 | Panels | floating windows: move, resize, edge-snap, minimise/maximise/close, taskbar, layout remembered | docks: drag/float/resize/close |
 
 Shared by both: `config.py`, `core.py`, `transports.py`, `storage.py`,
-`security.py`. Only the presentation layer differs.
+`security.py`, `anomaly.py`. Only the presentation layer differs.
 
 ## Quick start — web (no dependencies)
 
@@ -52,8 +54,12 @@ with no internet at the venue. Live data arrives over Server-Sent Events.
 
 Options: `python server.py --port 9000 --host 0.0.0.0`
 
+You'll land on a sign-in page first — that's the `viewer` gate (see *Demo
+login* below). Signing in sets a cookie; the dashboard itself opens after.
+
 > The login posts a plaintext password over HTTP, so it binds to `127.0.0.1` by
-> default. Don't expose it beyond the demo machine without TLS in front.
+> default. Don't expose it beyond the demo machine without TLS in front
+> (deferred — see *Security notes*).
 
 ## Quick start — desktop
 
@@ -63,19 +69,29 @@ python app.py          # from the dashboard/ folder
 # or, from the repo root:  python -m dashboard.app
 ```
 
-A window opens streaming simulated data. No Arduino required.
+A window opens streaming simulated data. No Arduino required. The desktop UI
+has no sign-in page of its own — it opens straight into monitoring, and the
+`guard` login gates the override controls (see below).
 
 ## Demo login
 
-Read-only monitoring needs no login. The **override/disarm controls** are gated:
+Two separate credentials, both gating different things:
 
-| Username | Password |
-|----------|----------------------|
-| `guard`  | `MuseumGuard!2026`   |
+| Username | Password          | Gates |
+|----------|-------------------|-------|
+| `viewer` | `N1KOM%YLHfN953J` | Loading the web dashboard at all (the sign-in page at `/`) |
+| `guard`  | `eBDTCBxO5D#edpT` | The **override/disarm controls** (web + desktop), via the in-page "Agent login" |
 
-The password is **not** stored in source — only a salted PBKDF2-SHA256 hash lives
-in `security.py`. To change it, follow the regeneration one-liner in that file and
-replace `_SALT_HEX` / `_HASH_HEX`.
+Both frontends enforce the same rule: a `viewer` login can watch but not act —
+only `guard` unlocks ARM/DISARM/Reset. The desktop app has no viewer gate on
+the window itself, so `viewer` is effectively web-only there.
+
+Neither password is stored in source — only salted PBKDF2-SHA256 hashes live in
+`security.py` (`_ACCOUNTS`). To rotate one, run the regeneration one-liner at
+the top of that file and replace the matching `salt` / `hash` entry.
+
+Login attempts (either account) are rate-limited per source IP: 5 failures
+locks that IP out for 5 minutes (`security.RateLimiter`).
 
 ## Using the dashboard
 
@@ -124,6 +140,8 @@ Common to both:
 
 ## Connecting a real Arduino (USB or Bluetooth)
 
+0. `pip install -r requirements.txt` — pulls in `pyserial` (the web UI needs
+   nothing else; `PySide6`/`pyqtgraph` in there are for the desktop UI).
 1. Set `SERIAL_PORT` / `SERIAL_BAUD` in `config.py` (on Windows a paired HC-05/06
    Bluetooth module appears as an outgoing **COM port**, so the same code path
    handles USB *and* Bluetooth-Classic — only the port name differs).
@@ -152,9 +170,13 @@ decision that never touches the UI:
   ready stubs — adding a transport is one small adapter, no UI changes.
 - **`config.py`** — sensors, thresholds, colours, timing, ports.
 - **`storage.py`** — SQLite + daily CSV logging + in-memory plot buffers.
-- **`security.py`** — PBKDF2 login (+ documented link-auth upgrade path).
+- **`security.py`** — PBKDF2 login, roles, per-IP rate limiting (+ documented
+  link-auth upgrade path).
+- **`anomaly.py`** — the shared anomaly-detection engine; both frontends feed it
+  readings and shade the windows it returns.
 - **`server.py` + `static/index.html`** — the web UI (stdlib HTTP + SSE; canvas
   charts and the window manager both live in `index.html`, no build step).
+  `static/login.html` is the sign-in page.
 - **`panels.py` + `app.py`** — the desktop UI (pyqtgraph widgets, main window).
 
 ## Local data logging (no Postgres)
@@ -167,6 +189,25 @@ Everything is logged locally, zero install:
   opens directly in Excel/pandas.
 
 Both are runtime artifacts and are git-ignored.
+
+## Security notes — web dashboard login
+
+- Two tiers: `viewer` (page access) and `guard` (overrides) — see *Demo login*.
+  `guard` is a strict superset of `viewer` (it can view too), enforced in
+  `security.role_satisfies`.
+- Passwords are salted PBKDF2-SHA256 (200k iterations), compared with
+  `hmac.compare_digest`; a wrong/unknown username still burns a PBKDF2 round so
+  it isn't measurably faster than a wrong password.
+- Login is rate-limited per client IP (`security.RateLimiter`): 5 failures in a
+  5-minute window locks that IP out for 5 minutes. This blocks *online*
+  guessing; it does nothing for someone who gets the hashes and brute-forces
+  offline (that's what the iteration count is for).
+- **Not yet done: TLS.** The login still posts the password in the clear over
+  plain HTTP — anyone on the same network segment can sniff it. Held off until
+  the Raspberry Pi deployment shape (reverse proxy vs. wrapping the socket
+  directly) is settled; until then, keep this off open/shared networks.
+- Session tokens (`Hub.tokens`) are in-memory only and die with the process —
+  by design, so a restart forces re-authentication.
 
 ## Security notes — is the Arduino ↔ laptop link safe?
 

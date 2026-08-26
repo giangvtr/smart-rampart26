@@ -54,6 +54,7 @@
     background:#12351b; color:#8ee79b; border-bottom:1px solid var(--line); font-size:13px;
   }
   #banner.alarm{background:var(--alarm); color:#fff; animation:flash 1s steps(1,end) infinite}
+  #banner.disarmed{background:var(--warn); color:#1a1300}
   @keyframes flash{50%{background:#8c1d18}}
 
   /* ---------- layout ---------- */
@@ -255,7 +256,7 @@
 <main>
   <aside>
     <h3>Controls</h3>
-    <div id="authState">Not logged in — overrides locked</div>
+    <div id="authState">Not logged in - no admin access</div>
     <div class="row"><button id="loginBtn" class="primary">Log in…</button></div>
     <div class="row">
       <button class="ctl" data-zone="SYSTEM" data-sensor="ALL" data-action="ARM">ARM</button>
@@ -1034,15 +1035,18 @@ function setSensor(key, value, state){
   if (dot) dot.style.background = col;
 }
 
+let SYSTEM_ARMED = true;
 let _bannerKey = null;
 function refreshBanner(){
   const alarming = [...charts.entries()].filter(([,c]) => c.state === "ALARM")
                      .map(([k]) => k.split(".")[0]);
-  const key = [...new Set(alarming)].sort().join(",");
+  const key = (SYSTEM_ARMED ? "A:" : "D:") + [...new Set(alarming)].sort().join(",");
   if (key === _bannerKey) return;      // only touch the DOM when it changes
   _bannerKey = key;
   const b = $("#banner");
-  if (key){ b.className = "alarm"; b.textContent = "⚠  ACTIVE ALARM: " + key; }
+  const alarmKey = [...new Set(alarming)].sort().join(",");
+  if (alarmKey){ b.className = "alarm"; b.textContent = "⚠  ACTIVE ALARM: " + alarmKey; }
+  else if (!SYSTEM_ARMED){ b.className = "disarmed"; b.textContent = "System disarmed (alarms suppressed for maintenance)"; }
   else { b.className=""; b.textContent = "All clear"; }
 }
 
@@ -1064,11 +1068,15 @@ function setConnected(on){
 // ALARM, a gap in the trace) even though the server has moved on or restarted.
 async function resync(){
   let boot;
-  try { boot = await (await fetch("/api/bootstrap", {cache:"no-store"})).json(); }
-  catch(_){ return; }                    // still down -- onopen fires again later
+  try {
+    const r = await fetch("/api/bootstrap", {cache:"no-store"});
+    if (r.status === 401){ location.href = "/login.html"; return; }  // session died (e.g. server restart)
+    boot = await r.json();
+  } catch(_){ return; }                    // still down -- onopen fires again later
 
   const restarted = boot.bootId !== BOOT.bootId;
   BOOT = boot; COLORS = boot.colors; SCALES = boot.timeScales;
+  SYSTEM_ARMED = boot.armed !== false;
 
   for (const d of boot.sensors){
     const ch = charts.get(d.key);
@@ -1203,7 +1211,7 @@ function setAuth(on, user){
   const s = $("#authState");
   s.className = on ? "on" : "";
   s.textContent = on ? `Logged in as ${user} — overrides enabled`
-                     : "Not logged in — overrides locked";
+                     : "Not logged in - no admin access";
   document.querySelectorAll(".ctl").forEach(b => b.disabled = !on);
   $("#loginBtn").textContent = on ? "Log out" : "Log in…";
 }
@@ -1273,6 +1281,7 @@ window.addEventListener("resize", () => {
 // ---------------------------------------------------------------------------
 (async function(){
   BOOT = await (await fetch("/api/bootstrap")).json();
+  SYSTEM_ARMED = BOOT.armed !== false;
   document.title = "MuseumGuard";
   build();
 
@@ -1289,6 +1298,7 @@ window.addEventListener("resize", () => {
     } else if (m.type === "anomaly"){ upsertAnomaly(m.anomaly); }
     else if (m.type === "connection"){ setConnected(m.connected); }
     else if (m.type === "log"){ addLog(m.msg, m.ts); }
+    else if (m.type === "system"){ SYSTEM_ARMED = m.armed !== false; }
   };
   // `open` fires on every (re)connection, including the first -- skip that one,
   // since the bootstrap above already seeded the page.
