@@ -1,4 +1,4 @@
-# Claude Code
+# Claude Code local settings
 .claude/
 
 # IntelliJ IDEA
@@ -7,3 +7,13 @@
 *.ipr
 *.iws
 out/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# OS
+.DS_Store
+Thumbs.db

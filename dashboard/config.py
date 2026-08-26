@@ -42,7 +42,7 @@ STATE_COLORS = {
 class SensorDef:
     def __init__(self, key, zone, label, unit, warn, alarm,
                  vmin, vmax, latched=False, period_s=2.0, detect_anomalies=True):
-        self.key = key            # unique id, e.g. "GALLERY.TEMP"
+        self.key = key            # unique id, e.g. "BASEMENT.TEMP"
         self.zone = zone
         self.label = label
         self.unit = unit
@@ -52,9 +52,10 @@ class SensorDef:
         self.vmax = vmax
         self.latched = latched
         self.period_s = period_s
-        # Whether anomaly.py should watch this stream. Off for on/off sensors:
-        # a 0/1 signal has no "normal spread" to learn, so every trip would
-        # score as an infinite deviation. Motion is covered by its alarm latch.
+        # Whether anomaly.py should watch this stream. Set False for on/off
+        # sensors: a 0/1 signal has no "normal spread" to learn, so every trip
+        # would score as an infinite deviation. All four current sensors are
+        # continuous, so none of them need it -- kept for the next on/off one.
         self.detect_anomalies = detect_anomalies
 
     @property
@@ -63,19 +64,22 @@ class SensorDef:
         return self.key.split(".", 1)[1]
 
 
-# Two zones from the spec: Gallery (exhibition hall) + Basement.
+# One zone: the Basement rig -- the four sensors the ESP32 node actually
+# carries (water level, temperature, humidity, fire). The Gallery zone (light
+# and motion in the exhibition hall) was dropped: no firmware ever sent it, so
+# its tiles only ever showed DISCONNECTED. Adding a second zone back is just
+# more entries here plus a ZONE_ALIASES line -- nothing else is zone-aware.
 SENSORS = [
-    SensorDef("GALLERY.TEMP",     "GALLERY",  "Temperature", "°C",
-              warn=(18, 24), alarm=(15, 28), vmin=10, vmax=32, period_s=2.0),
-    SensorDef("GALLERY.HUMIDITY", "GALLERY",  "Humidity",    "%RH",
-              warn=(45, 55), alarm=(35, 65), vmin=20, vmax=80, period_s=2.0),
-    SensorDef("GALLERY.LIGHT",    "GALLERY",  "Light",       "adc",
-              warn=(None, 700), alarm=(None, 900), vmin=0, vmax=1023, period_s=1.0),
-    SensorDef("GALLERY.MOTION",   "GALLERY",  "Motion",      "bool",
-              warn=None, alarm=(None, 0.5), vmin=0, vmax=1, latched=True, period_s=0.5,
-              detect_anomalies=False),
     SensorDef("BASEMENT.WATER",   "BASEMENT", "Water level", "adc",
               warn=(None, 100), alarm=(None, 300), vmin=0, vmax=600, latched=True, period_s=2.0),
+    SensorDef("BASEMENT.TEMP",     "BASEMENT", "Temperature", "°C",
+              warn=(18, 26), alarm=(15, 30), vmin=10, vmax=40, period_s=3.0),
+    SensorDef("BASEMENT.HUMIDITY", "BASEMENT", "Humidity",    "%RH",
+              warn=(40, 60), alarm=(30, 70), vmin=20, vmax=90, period_s=3.0),
+    # Fire: potentiometer stand-in (0..100). Upper danger bound only; latched so
+    # a detected fire stays in ALARM until an explicit reset/override.
+    SensorDef("BASEMENT.FIRE",     "BASEMENT", "Fire",        "idx",
+              warn=(None, 50), alarm=(None, 70), vmin=0, vmax=100, latched=True, period_s=3.0),
 ]
 
 SENSORS_BY_KEY = {s.key: s for s in SENSORS}
@@ -84,6 +88,39 @@ ZONES = sorted({s.zone for s in SENSORS})
 
 def sensor_lookup(zone: str, sensor: str) -> SensorDef | None:
     return SENSORS_BY_KEY.get(f"{zone}.{sensor}")
+
+
+# --------------------------------------------------------------------------
+# ESP32 HTTP-ingest mapping (WiFi path)
+# --------------------------------------------------------------------------
+# The ESP32 firmware posts one JSON blob per node using short zone ids and its
+# own field names. HttpIngestSource fans that blob out into canonical per-sensor
+# Readings using the two maps below, so the firmware wire format stays simple
+# while the dashboard still sees the BASEMENT.TEMP / BASEMENT.WATER model.
+
+# short firmware zone id -> canonical zone (pass-through if already canonical)
+ZONE_ALIASES = {
+    "BASE01": "BASEMENT",
+    "BASEMENT": "BASEMENT",
+}
+
+# JSON field in the POST body -> canonical SENSOR token. Fields not listed
+# (e.g. "air", "light", "motion", "state", "zone") are ignored by the fan-out,
+# so a node may post extra fields without the server caring.
+FIELD_TO_SENSOR = {
+    "temp": "TEMP",
+    "temperature": "TEMP",
+    "humidity": "HUMIDITY",
+    "water": "WATER",
+    "level": "WATER",
+    "fire": "FIRE",
+    "pot": "FIRE",
+}
+
+
+def canonical_zone(zone: str) -> str:
+    z = str(zone).strip().upper()
+    return ZONE_ALIASES.get(z, z)
 
 
 # --------------------------------------------------------------------------
