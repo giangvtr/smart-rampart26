@@ -38,6 +38,7 @@ Pick whichever you prefer — they share the same engine and the same database:
 | UI files | `server.py` + `static/index.html` (+ `static/login.html`) | `app.py` + `panels.py` |
 | Dependencies | **none** (stdlib only) | PySide6 + pyqtgraph |
 | Graph controls | wheel-zoom, drag-pan, live/pause, hover readout | pan/zoom via pyqtgraph |
+| On a phone | drawer sidebar, Simple boxes, graphs as a scrolling stack | — |
 | Panels | floating windows: move, resize, edge-snap, minimise/maximise/close, taskbar, layout remembered | docks: drag/float/resize/close |
 | Simple view | value-only boxes, mobile-ready | — |
 
@@ -110,10 +111,20 @@ just its current value, filled with that sensor's state colour (green OK, amber
 warning, red alarm, grey disconnected; alarming boxes pulse). Handy for a wall
 display or a quick glance, and it's what phones get. The choice is remembered.
 
-**On a phone**, the sidebar becomes a ☰ drawer that slides over the content
-instead of eating half the screen (tap the dimmed area to close it), the boxes
-reflow to two columns, and the Simple view is the default — the floating windows
-are still reachable through the switch, they're just not much use at that size.
+**On a phone** (≤ 760 px), the sidebar becomes a ☰ drawer that slides over the
+content instead of eating half the screen (tap the dimmed area to close it), the
+Simple boxes reflow to two columns, and Simple is the default view. The choice is
+still yours — **Graphs** works on a phone too, it just stops floating:
+
+- The panels become **one column** that scrolls **up and down**, in sensor order.
+- Each chart keeps a readable ~700 px width and **scrolls left/right inside its
+  own panel** — a full trace squeezed into 340 px is worth nothing. The value
+  axis stays pinned to the left edge as you swipe.
+- A panel **follows the live edge** until you swipe back in time, then stays
+  where you left it; swipe back to the right edge to start following again.
+- Move / resize / snap / maximise are off (there is nowhere to float to), but the
+  time-scale picker, **● Live**, close, the taskbar and the sidebar toggles all
+  work as usual. Rotate to a wide screen and the floating workspace comes back.
 
 **Windows (web):** every sensor is a floating window in a desktop-style
 workspace.

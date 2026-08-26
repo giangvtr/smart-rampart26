@@ -290,14 +290,63 @@
     .card .val{font-size:30px; padding-top:8px}
     .card .val.txt{font-size:20px}
     #banner{font-size:12px; padding:5px 12px}
+    /* nothing floats at this size, so there is no layout left to reset */
+    #resetLayout{display:none}
+    /* thumb-sized hit areas for everything that is tapped rather than clicked */
+    #taskbar{padding:5px 9px; gap:7px}
+    #taskbar .tb{padding:5px 11px}
+    .tog{padding:7px 0}
+    .anom{padding:8px 9px}
+    aside{padding:12px 12px 20px}
   }
   /* keep the header on one row on a phone: shed the wordy bits, keep the state */
   @media (max-width:560px){
     .seg .lbl, .pill .lbl, .brand .bn{display:none}
     .seg button{padding:5px 9px; font-size:13px}
     .pill{padding:4px 9px; gap:5px}
-    #resetLayout{font-size:12px; padding:5px 8px}
   }
+  /* the dot already says connected / not; on the narrowest phones the word goes */
+  @media (max-width:430px){
+    #connText{display:none}
+    .pill{padding:4px 8px}
+    header{gap:6px}
+  }
+
+  /* ---------- mobile graphs view: a scrolling stack of panels ----------------
+     Floating windows need a pointer and room to float. On a phone the same
+     panels become one plain column that scrolls up and down, and each chart
+     keeps a desktop-ish width inside its own left/right scroller -- a squeezed
+     340px trace is unreadable. The window manager writes geometry to the style
+     attribute, so the overrides here have to be !important. */
+  body.stacked #workspace{
+    display:flex; flex-direction:column; gap:10px; padding:10px;
+    overflow-x:hidden; overflow-y:auto; overscroll-behavior-y:contain;
+    -webkit-overflow-scrolling:touch;
+  }
+  body.stacked #snapGhost{display:none}
+  body.stacked .win{
+    position:static !important; flex:none; min-width:0;
+    left:auto !important; top:auto !important;
+    width:auto !important; height:auto !important; z-index:auto !important;
+    box-shadow:0 3px 12px #00000066;
+  }
+  body.stacked .win .rz{display:none}
+  body.stacked .win-head{cursor:default; height:34px}
+  body.stacked .win-head .wb.min,
+  body.stacked .win-head .wb.max{display:none}
+  body.stacked .win-head .wb{width:32px; height:26px; font-size:13px}
+  /* the container queries drop the time-scale picker on a narrow window; here it
+     is one of the few controls left, so put it back */
+  body.stacked .win-head select{display:inline-block; font-size:12px; padding:3px 5px}
+  body.stacked .chart-wrap{
+    flex:none; height:200px; overflow-x:auto; overflow-y:hidden;
+    overscroll-behavior-x:contain; -webkit-overflow-scrolling:touch;
+  }
+  /* wider than the screen on purpose -- that is what makes it swipe sideways */
+  body.stacked .chart-wrap canvas{min-width:700px; cursor:default; touch-action:pan-x pan-y}
+  body.stacked .chart-wrap::-webkit-scrollbar{height:6px}
+  body.stacked .chart-wrap::-webkit-scrollbar-track{background:transparent}
+  body.stacked .chart-wrap::-webkit-scrollbar-thumb{background:#3d4854; border-radius:3px}
 
   /* ---------- modal ---------- */
   #modal{
@@ -306,7 +355,7 @@
   }
   #modal.show{display:flex}
   .dlg{background:var(--panel); border:1px solid var(--line); border-radius:10px;
-    padding:20px; width:320px}
+    padding:20px; width:min(320px, calc(100vw - 28px))}
   .dlg h2{margin:0 0 14px; font-size:16px}
   .dlg label{display:block; font-size:12px; color:var(--muted); margin:10px 0 4px}
   .dlg input{width:100%}
@@ -329,7 +378,7 @@
   <div class="pill quiet" id="anomPill" title="Anomalies detected this run — click for the list">
     ⚡ <span id="anomPillN">0</span><span class="lbl"> anomalies</span>
   </div>
-  <div class="pill"><span class="dot" id="connDot"></span><span id="connText">connecting…</span></div>
+  <div class="pill" id="connPill"><span class="dot" id="connDot"></span><span id="connText">connecting…</span></div>
 </header>
 
 <div id="banner">All clear</div>
@@ -411,7 +460,9 @@ let zTop = 10;
 const VIEW_KEY = "museumguard.view.v1";
 let SIMPLE = false;
 let layoutStale = false;      // viewport changed while the workspace was hidden
-const isMobile = () => window.matchMedia("(max-width:760px)").matches;
+let STACKED = false;          // phone-sized graphs view: one scrolling column, no floating
+const MQ_MOBILE = window.matchMedia("(max-width:760px)");
+const isMobile = () => MQ_MOBILE.matches;
 
 const $ = s => document.querySelector(s);
 const fmtClock = ts => new Date(ts * 1000).toLocaleTimeString();
@@ -465,7 +516,21 @@ class Chart {
     canvas.addEventListener("pointermove", e => this.onMove(e));
     canvas.addEventListener("pointerup",   e => this.onUp(e));
     canvas.addEventListener("pointerleave", () => { this.hover=null; this.tip.style.display="none"; this.dirty=true; });
+    // a swipe the browser takes over for scrolling -- drop whatever it started
+    canvas.addEventListener("pointercancel", () => {
+      this.drag=null; this.hover=null; this.tip.style.display="none"; this.dirty=true;
+    });
     canvas.addEventListener("dblclick", () => this.goLive());
+    // Stacked on a phone the panel scrolls sideways. Follow the live (right) edge
+    // until the reader swipes away from it, then leave them where they put it --
+    // the same tail-following a log viewer does.
+    this.wrap = canvas.parentElement;
+    this.followRight = true;
+    this.wrap.addEventListener("scroll", () => {
+      this.dirty = true;
+      const max = this.wrap.scrollWidth - this.wrap.clientWidth;
+      this.followRight = max <= 0 || this.wrap.scrollLeft >= max - 2;
+    }, {passive:true});
   }
 
   push(ts, val) {
@@ -516,7 +581,12 @@ class Chart {
     if (!this.live) this.right = anchor + (this.right - anchor) * factor;
     this.dirty = true;
   }
-  onDown(e){ this.drag = {x:e.clientX, right:this.right}; this.cv.setPointerCapture(e.pointerId); }
+  onDown(e){
+    // stacked on a phone, a sideways swipe scrolls the chart panel -- capturing
+    // it here to pan the time axis would swallow the only scroll gesture there is
+    if (STACKED && e.pointerType !== "mouse") return;
+    this.drag = {x:e.clientX, right:this.right}; this.cv.setPointerCapture(e.pointerId);
+  }
   onUp(e){ this.drag = null; try{ this.cv.releasePointerCapture(e.pointerId);}catch(_){} }
   onMove(e){
     const r = this.cv.getBoundingClientRect();
@@ -532,6 +602,10 @@ class Chart {
 
   // -- drawing ------------------------------------------------------------
   draw(){
+    if (STACKED && this.followRight){
+      const max = this.wrap.scrollWidth - this.wrap.clientWidth;
+      if (max > 0 && this.wrap.scrollLeft !== max) this.wrap.scrollLeft = max;
+    }
     const dpr = window.devicePixelRatio || 1;
     const w = this.cv.clientWidth, h = this.cv.clientHeight;
     if (!w || !h) return;
@@ -673,10 +747,30 @@ class Chart {
       }
     } else this.tip.style.display="none";
 
+    // ---- value axis, pinned ----------------------------------------------
+    // Stacked on a phone the canvas is wider than its panel and swipes sideways,
+    // which would carry the y axis off-screen. Redraw it over the plot at the
+    // current scroll offset instead; on a desktop scrollLeft is 0 and this is a
+    // no-op over the gutter the grid pass already drew.
+    const sx = Math.round(this.wrap.scrollLeft || 0);
+    if (sx > 0){
+      c.fillStyle = "#171c22";                       // = --panel, the win background
+      c.fillRect(sx, 0, L, h);
+      c.fillStyle = "#8b98a5"; c.textAlign = "right"; c.textBaseline = "middle";
+      c.font = "10px ui-monospace,Consolas,monospace";
+      for (let i=0;i<=ySteps;i++){
+        const val = yMin + (yMax-yMin)*i/ySteps;
+        c.fillText(val.toFixed(val>=100?0:1), sx + L - 6, Math.round(Y(val))+.5);
+      }
+      c.strokeStyle = "#2a323c";
+      c.beginPath(); c.moveTo(sx+L+.5, T); c.lineTo(sx+L+.5, T+ph); c.stroke();
+    }
+
     // "PAUSED" marker when scrolled off live
     if (!this.live){
       c.fillStyle="#d29922"; c.textAlign="right"; c.textBaseline="top";
-      c.font="10px sans-serif"; c.fillText("⏸ PAUSED", L+pw-2, T+2);
+      c.font="10px sans-serif";
+      c.fillText("⏸ PAUSED", Math.min(L+pw-2, sx + this.wrap.clientWidth - 6), T+2);
     }
     this.dirty = false;
   }
@@ -760,8 +854,11 @@ class Win {
     this.el.classList.remove("hidden"); this.tb.classList.remove("off");
     syncToggle(this.key, true);
     this.focus(); markDirty(this.key); saveLayout();
+    const ch = charts.get(this.key);
+    if (ch) ch.followRight = true;      // it rejoins the column at the live edge
   }
   toggleMax(){
+    if (STACKED) return;               // nothing to maximise into
     if (this.maxed){
       this.setMaxed(false);
       if (this.restore) this.setRect(this.restore, true);
@@ -786,6 +883,7 @@ class Win {
 
   // -- dragging (move + edge snap) ----------------------------------------
   startDrag(e){
+    if (STACKED) return;               // the panels are a fixed column, not floating
     if (e.button !== 0 || e.target.closest("button,select,input")) return;
     this.focus();
     if (this.maxed){                   // dragging a maximised window restores it under the cursor
@@ -833,7 +931,7 @@ class Win {
 
   // -- resizing from any edge / corner -------------------------------------
   startResize(e, dir){
-    if (e.button !== 0) return;
+    if (STACKED || e.button !== 0) return;
     e.stopPropagation(); e.preventDefault();
     this.focus(); this.setMaxed(false);
     const st = this.rect(), ws = wsRect();
@@ -904,6 +1002,7 @@ function hideGhost(){ $("#snapGhost").style.display = "none"; }
 const openWins = () => [...wins.values()].filter(w => !w.closed && !w.minimised);
 
 function tile(cols){
+  if (STACKED) return;                 // CSS owns the geometry while stacked
   const list = openWins(); if (!list.length) return;
   const w = wsRect();
   // never ask for more columns than fit at MIN_W -- otherwise setRect clamps the
@@ -939,6 +1038,7 @@ function defaultLayout(){
 // -- persistence ----------------------------------------------------------
 let saveTimer = null;
 function saveLayout(){
+  if (STACKED) return;      // never overwrite the desktop arrangement with the stack
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
     const data = {custom: layoutCustomised,
@@ -964,13 +1064,17 @@ function loadLayout(){
     requestAnimationFrame(() => { aside.style.transition = ""; });
   }
   const ws = wsRect();
+  // A phone shows the stacked column, so the workspace it would be clamped
+  // against is the wrong size -- keep the desktop rects intact for next time.
+  const fit = !isMobile();
   let any = false;
   for (const [k, win] of wins){
     const s = data.w[k]; if (!s) continue;
     any = true;
-    win.setRect({x: clamp(s.x, 0, Math.max(0, ws.width-60)),
-                 y: clamp(s.y, 0, Math.max(0, ws.height-24)),
-                 w: Math.min(s.w, ws.width), h: Math.min(s.h, ws.height)});
+    win.setRect(fit ? {x: clamp(s.x, 0, Math.max(0, ws.width-60)),
+                       y: clamp(s.y, 0, Math.max(0, ws.height-24)),
+                       w: Math.min(s.w, ws.width), h: Math.min(s.h, ws.height)}
+                    : {x:s.x, y:s.y, w:s.w, h:s.h});
     win.restore = s.restore || null;
     win.z = s.z || ++zTop; zTop = Math.max(zTop, win.z);
     win.el.style.zIndex = win.z;
@@ -1181,6 +1285,22 @@ function paintCard(key, state, value, ts){
   if (ts) el.querySelector(".ago").textContent = fmtClock(ts);
 }
 
+/**
+ * Phone-sized graphs view: the panels become one scrolling column (see the
+ * `body.stacked` rules). The window manager stays loaded, it simply has nothing
+ * to manage until the screen grows back.
+ */
+function syncStacked(){
+  const on = isMobile() && !SIMPLE;
+  if (on === STACKED) return;
+  STACKED = on;
+  document.body.classList.toggle("stacked", on);
+  for (const c of charts.values()) c.dirty = true;
+  // hiding the workspace resets every scroll box to 0, so come back at the live edge
+  if (on) for (const c of charts.values()) c.followRight = true;
+  else layoutStale = true;      // the saved rects went stale while CSS held the geometry
+}
+
 function setView(v, initial){
   const simple = v === "simple";
   if (simple === SIMPLE && !initial) return;
@@ -1189,9 +1309,10 @@ function setView(v, initial){
   $("#viewSimple").classList.toggle("on", simple);
   $("#viewGraphs").classList.toggle("on", !simple);
   try{ localStorage.setItem(VIEW_KEY, v); }catch(_){}
+  syncStacked();
   if (!simple){
     // the workspace could not be measured while it was hidden, so re-fit first
-    if (layoutStale){ layoutCustomised ? clampAll() : tile(2); layoutStale = false; }
+    if (!STACKED && layoutStale){ layoutCustomised ? clampAll() : tile(2); layoutStale = false; }
     for (const c of charts.values()) c.dirty = true;
   }
   if (isMobile()) closeSidebar();
@@ -1218,6 +1339,9 @@ function refreshBanner(){
 function setConnected(on){
   $("#connDot").className = "dot" + (on ? " on" : "");
   $("#connText").textContent = on ? "CONNECTED" : "DISCONNECTED";
+  // narrow phones hide the word, so the dot needs to carry it in its tooltip
+  $("#connPill").title = on ? "Connected to the sensor stream"
+                            : "Disconnected from the sensor stream";
   if (!on) for (const [key, ch] of charts){
     ch.state = "DISCONNECTED"; ch.dirty = true;
     const el = document.getElementById("win-"+key);
@@ -1440,6 +1564,7 @@ $("#sideToggle").addEventListener("click", () => {
 $("#backdrop").addEventListener("click", closeSidebar);
 
 function clampAll(){
+  if (STACKED) return;
   const w = wsRect();
   for (const win of wins.values()){
     if (win.maxed){ win.setRect({x:GAP, y:GAP, w:w.width-2*GAP, h:w.height-2*GAP}); continue; }
@@ -1455,7 +1580,9 @@ window.addEventListener("resize", () => {
   syncSideGlyph();
   clearTimeout(rzTimer);
   rzTimer = setTimeout(() => {
-    if (SIMPLE){ layoutStale = true; return; }   // wsRect() is 0x0 while hidden
+    syncStacked();
+    // wsRect() is 0x0 while the workspace is hidden, and the stack lays itself out
+    if (SIMPLE || STACKED){ layoutStale = true; return; }
     layoutCustomised ? clampAll() : tile(2);
   }, 120);
 });
