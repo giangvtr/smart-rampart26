@@ -1,21 +1,22 @@
 """
-MuseumGuard dashboard -- web frontend.
+MuseumGuard dashboard -- web frontend (alternative to the Qt desktop app).
 
-Uses **only the Python standard library** on the server side: no Flask, no
-FastAPI, no npm, no CDN. The browser page (static/index.html) draws its charts
-on a plain <canvas> -- no charting library either, so the demo works with no
-internet at the venue.
+Same features, nicer UI, better graph controls. Uses **only the Python standard
+library** on the server side: no Flask, no FastAPI, no npm, no CDN. The browser
+page (static/index.html) draws its charts on a plain <canvas> -- no charting
+library either, so the demo works with no internet at the venue.
 
-The presentation layer sits on top of a transport-agnostic engine:
+Both frontends share the exact same engine; only the presentation differs:
 
-    config.py / core.py / transports.py / storage.py / security.py   <- engine
-        server.py + static/index.html                    -> browser UI (this file)
+    config.py / core.py / transports.py / storage.py / security.py   <- shared
+        app.py    + panels.py            -> PySide6 desktop UI
+        server.py + static/index.html    -> browser UI   (this file)
 
 Run:
     python server.py            # then open http://127.0.0.1:8000
     python server.py --port 9000 --host 0.0.0.0
 
-The transport (simulator / serial / ...) is chosen in make_source() below.
+Transport is chosen exactly like the desktop app -- see make_source() below.
 
 Live data reaches the browser over Server-Sent Events (SSE), a one-way stream
 that is a natural fit for telemetry and needs no WebSocket library. Commands go
@@ -34,6 +35,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
 
+import anomaly
 import config
 import security
 from core import Command
@@ -62,6 +64,10 @@ class Hub:
     def __init__(self):
         self.storage = Storage()
         self.source = make_source()
+        # Learns each stream's normal and flags the windows that break it. It
+        # lives here rather than in the browser so every tab sees the same
+        # verdicts, and so one opened late still gets what it missed.
+        self.detector = anomaly.AnomalyEngine()
         self.connected = False
         self.armed = True
         # New id per process. All server state (buffers, latches, tokens) lives
@@ -108,10 +114,23 @@ class Hub:
     # -- source callbacks (fire on the transport thread) -------------------
     def _on_reading(self, reading) -> None:
         prev = self.storage.record_reading(reading)
+        # score before broadcasting, so the reading can carry the expected range
+        # this very sample was judged against -- the chart draws them together
+        records = self.detector.feed(reading)
         self._broadcast("reading", {
             "key": reading.key, "zone": reading.zone, "sensor": reading.sensor,
             "value": reading.value, "state": reading.state, "ts": reading.ts,
+            "band": self.detector.current_band(reading.key),
         })
+        for record in records:
+            self._broadcast("anomaly", {"anomaly": record})
+            # Log it once, when the window closes: while it is open its kind and
+            # severity are still being written, and a spike that turns out to be
+            # a level shift should not appear in the log twice.
+            if not record["open"]:
+                self._log(f"ANOMALY [{record['zone']}·{record['label']}] "
+                          f"{record['kindLabel']} ({record['severity']}) — "
+                          f"{record['message']}")
         if prev is not None:
             unit = config.SENSORS_BY_KEY[reading.key].unit
             self._log(f"[{reading.zone}·{reading.sensor}] {prev} → {reading.state}"
@@ -143,6 +162,8 @@ class Hub:
                 "history": {"t": times, "v": values},
                 "state": buf.last_state or config.STATE_DISCONNECTED,
                 "value": buf.last_value,
+                "detectAnomalies": s.detect_anomalies,
+                "band": self.detector.band(s.key),
             })
         return {
             "bootId": self.boot_id,
@@ -153,6 +174,8 @@ class Hub:
             "defaultScaleIndex": config.DEFAULT_TIME_SCALE_INDEX,
             "connected": self.connected,
             "armed": self.armed,
+            "anomalyEnabled": self.detector.enabled,
+            "anomalies": self.detector.recent(60),
             "events": self._events[-50:],
             "serverTime": time.time(),
         }

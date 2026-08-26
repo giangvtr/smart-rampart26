@@ -134,3 +134,44 @@ class RateLimiter:
 
 
 LOGIN_LIMITER = RateLimiter()
+
+
+class Session:
+    """Tiny in-memory login state for the desktop UI; no persistence/token.
+
+    The web server does not use this -- it issues tokens (see `Hub.tokens` in
+    server.py). Roles work the same in both: check `role` against what the
+    action needs, via `role_satisfies`.
+    """
+
+    def __init__(self) -> None:
+        self._user: str | None = None
+        self._role: str | None = None
+
+    @property
+    def authenticated(self) -> bool:
+        return self._user is not None
+
+    @property
+    def user(self) -> str | None:
+        return self._user
+
+    @property
+    def role(self) -> str | None:
+        return self._role
+
+    def can(self, required: str) -> bool:
+        """True if the logged-in account satisfies `required` ("viewer"/"guard")."""
+        return role_satisfies(self._role, required)
+
+    def login(self, username: str, password: str) -> bool:
+        role = authenticate(username, password)
+        if role:
+            self._user = username.strip().lower()
+            self._role = role
+            return True
+        return False
+
+    def logout(self) -> None:
+        self._user = None
+        self._role = None

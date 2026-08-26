@@ -2,8 +2,8 @@
 
 Monitoring station for the MuseumGuard sensor rig (temp/humidity, light, water
 level, motion across a Gallery + Basement zone). Live charts in floating,
-snappable windows, colour-coded alarm states, an alarm banner, login-gated
-alarm override/disarm, and zero-install local logging.
+snappable windows, colour-coded alarm states, a flashing alarm banner,
+login-gated alarm override/disarm, and zero-install local logging.
 
 Runs today against a built-in **simulator** (no hardware needed); swaps to a real
 Arduino over USB/Bluetooth by changing one line.
@@ -13,6 +13,7 @@ Arduino over USB/Bluetooth by changing one line.
 Working end to end, on simulated data:
 
 - ✅ Web UI (stdlib server + SSE, canvas charts, floating-window workspace).
+- ✅ Desktop UI (PySide6 + pyqtgraph docks) — feature-equivalent.
 - ✅ Simulator with latching water/motion alarms that honour ARM/DISARM/RESET.
 - ✅ SQLite + daily CSV logging, audit trail for logins and overrides.
 - ✅ Two-tier PBKDF2 login: a `viewer` password gates the dashboard itself, a
@@ -25,24 +26,22 @@ Working end to end, on simulated data:
 - 🚧 HMAC frame authentication for the radio link is designed and documented
   below, but **not wired in** — see *Security notes*.
 
-## One frontend, one engine
+## Two frontends, one engine
 
-The UI is the browser dashboard: `server.py` + `static/index.html`, with **no
-dependencies** beyond the Python standard library.
+Pick whichever you prefer — they share the same engine and the same database:
 
-| | |
-|---|---|
-| Run | `python server.py` → http://127.0.0.1:8000 |
-| UI files | `server.py` + `static/index.html` (+ `static/login.html`) |
-| Dependencies | **none** (stdlib only) |
-| Graph controls | wheel-zoom, drag-pan, live/pause, hover readout |
-| Panels | floating windows: move, resize, edge-snap, minimise/maximise/close, taskbar, layout remembered |
+| | Web (recommended) | Desktop |
+|---|---|---|
+| Run | `python server.py` → http://127.0.0.1:8000 | `python app.py` |
+| UI files | `server.py` + `static/index.html` (+ `static/login.html`) | `app.py` + `panels.py` |
+| Dependencies | **none** (stdlib only) | PySide6 + pyqtgraph |
+| Graph controls | wheel-zoom, drag-pan, live/pause, hover readout | pan/zoom via pyqtgraph |
+| Panels | floating windows: move, resize, edge-snap, minimise/maximise/close, taskbar, layout remembered | docks: drag/float/resize/close |
 
-The presentation layer sits on a transport-agnostic engine — `config.py`,
-`core.py`, `transports.py`, `storage.py`, `security.py` — which has no UI
-dependency at all.
+Shared by both: `config.py`, `core.py`, `transports.py`, `storage.py`,
+`security.py`, `anomaly.py`. Only the presentation layer differs.
 
-## Quick start (no dependencies)
+## Quick start — web (no dependencies)
 
 ```bash
 python server.py            # from the dashboard/ folder
@@ -62,14 +61,30 @@ login* below). Signing in sets a cookie; the dashboard itself opens after.
 > default. Don't expose it beyond the demo machine without TLS in front
 > (deferred — see *Security notes*).
 
+## Quick start — desktop
+
+```bash
+pip install -r requirements.txt
+python app.py          # from the dashboard/ folder
+# or, from the repo root:  python -m dashboard.app
+```
+
+A window opens streaming simulated data. No Arduino required. The desktop UI
+has no sign-in page of its own — it opens straight into monitoring, and the
+`guard` login gates the override controls (see below).
+
 ## Demo login
 
 Two separate credentials, both gating different things:
 
 | Username | Password          | Gates |
 |----------|-------------------|-------|
-| `viewer` | `N1KOM%YLHfN953J` | Loading the dashboard at all (the sign-in page at `/`) |
-| `guard`  | `eBDTCBxO5D#edpT` | The **override/disarm controls**, via the in-page "Agent login" |
+| `viewer` | `N1KOM%YLHfN953J` | Loading the web dashboard at all (the sign-in page at `/`) |
+| `guard`  | `eBDTCBxO5D#edpT` | The **override/disarm controls** (web + desktop), via the in-page "Agent login" |
+
+Both frontends enforce the same rule: a `viewer` login can watch but not act —
+only `guard` unlocks ARM/DISARM/Reset. The desktop app has no viewer gate on
+the window itself, so `viewer` is effectively web-only there.
 
 Neither password is stored in source — only salted PBKDF2-SHA256 hashes live in
 `security.py` (`_ACCOUNTS`). To rotate one, run the regeneration one-liner at
@@ -80,13 +95,13 @@ locks that IP out for 5 minutes (`security.RateLimiter`).
 
 ## Using the dashboard
 
-**Graph controls:** mouse-wheel over a chart to **zoom** the time axis,
+**Graph controls (web):** mouse-wheel over a chart to **zoom** the time axis,
 **drag** to scroll back through history (the chart shows `⏸ PAUSED`),
 **double-click** or the **● Live** button to jump back to now. Hovering shows a
 crosshair with the exact value and timestamp. Each window's title bar carries a
 time-scale selector (30 s / 2 min / 5 min / 30 min / All).
 
-**Windows:** every sensor is a floating window in a desktop-style
+**Windows (web):** every sensor is a floating window in a desktop-style
 workspace.
 
 - **Move** by dragging the title bar; **resize** from any edge or corner.
@@ -105,9 +120,16 @@ workspace.
   everything. Otherwise the arrangement — positions, sizes, z-order, what's
   closed, sidebar state — is saved to `localStorage` and restored on reload.
 
+**Docks (desktop):** panels are pyqtgraph docks — drag to rearrange, drag edges
+to resize, drag out to float, **×** to close, and the **View** menu re-adds
+closed ones.
+
+Common to both:
+
 - Warn/alarm zones are shaded on every chart; the panel border and read-out
   recolour with state (green OK, amber warning, red alarm).
-- A **banner** across the top names the zones currently in ALARM.
+- A **banner** across the top names the zones currently in ALARM (it flashes in
+  the desktop UI).
 - **Status tiles** give a one-glance value + state per sensor.
 - **Controls**: log in, then **ARM/DISARM** the security system or **Reset** a
   latched water/motion alarm. `DISARM` is the "someone's cleaning, don't fire the
@@ -118,13 +140,14 @@ workspace.
 
 ## Connecting a real Arduino (USB or Bluetooth)
 
-0. `pip install -r requirements.txt` — pulls in `pyserial`, the *only*
-   dependency in the project and needed for the serial/Bluetooth path alone.
+0. `pip install -r requirements.txt` — pulls in `pyserial` (the web UI needs
+   nothing else; `PySide6`/`pyqtgraph` in there are for the desktop UI).
 1. Set `SERIAL_PORT` / `SERIAL_BAUD` in `config.py` (on Windows a paired HC-05/06
    Bluetooth module appears as an outgoing **COM port**, so the same code path
    handles USB *and* Bluetooth-Classic — only the port name differs).
-2. In `make_source()` (in `server.py`) comment the `SimulatedSource()` line and
-   uncomment the `SerialSource(...)` line.
+2. In `make_source()` — in `server.py` for the web UI, or `app.py` for the
+   desktop UI — comment the `SimulatedSource()` line and uncomment the
+   `SerialSource(...)` line.
 3. Firmware should emit one line per reading:
    `ZONE,SENSOR,VALUE,STATE,TIMESTAMP\n`
    e.g. `BASEMENT,WATER,340,ALARM,00:14:02`. The dashboard sends commands back as
@@ -141,16 +164,20 @@ decision that never touches the UI:
 - **`core.py`** — the canonical `Reading`/`Command` model + the `Source` and
   `Codec` interfaces (with `LineCodec` CSV and `JsonCodec`). The whole app imports
   only from here. Deliberately has **no GUI-framework dependency** (its `Event` is
-  a plain observer), so the engine runs headless just as well as under the server.
+  a plain observer, not a Qt signal) so both frontends share it.
 - **`transports.py`** — adapters: `SimulatedSource`, `SerialSource` (USB +
   Bluetooth-Classic). `WebSocketSource` (WiFi/ESP) and `BleSource` (HM-10 BLE) are
   ready stubs — adding a transport is one small adapter, no UI changes.
 - **`config.py`** — sensors, thresholds, colours, timing, ports.
 - **`storage.py`** — SQLite + daily CSV logging + in-memory plot buffers.
-- **`security.py`** — PBKDF2 login (+ documented link-auth upgrade path).
+- **`security.py`** — PBKDF2 login, roles, per-IP rate limiting (+ documented
+  link-auth upgrade path).
+- **`anomaly.py`** — the shared anomaly-detection engine; both frontends feed it
+  readings and shade the windows it returns.
 - **`server.py` + `static/index.html`** — the web UI (stdlib HTTP + SSE; canvas
   charts and the window manager both live in `index.html`, no build step).
   `static/login.html` is the sign-in page.
+- **`panels.py` + `app.py`** — the desktop UI (pyqtgraph widgets, main window).
 
 ## Local data logging (no Postgres)
 
