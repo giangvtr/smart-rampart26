@@ -14,7 +14,7 @@
 // Wiring (all 3.3V logic):
 //   Water sensor signal (S) -> GPIO34   (ADC1, input-only)
 //   Potentiometer wiper     -> GPIO35   (ADC1, input-only) = fire index
-//   DHT data                -> GPIO4
+//   DHT data                -> GPIO21  (a bidirectional pin; keep the wire SHORT)
 //   Water sensor / DHT VCC -> 3V3,  GND -> GND
 //   IMPORTANT: GPIO34/35 have NO internal pull resistor. If a pin is left
 //   unconnected, add a 10k resistor from that pin -> GND so it reads a
@@ -29,7 +29,7 @@
 #include <WiFi.h>
 #include <HTTPClient.h>
 #include <WiFiClientSecure.h>   // needed when SERVER is an https:// URL (tunnel)
-#include "DHT.h"                // Adafruit "DHT sensor library" + "Adafruit Unified Sensor"
+#include "DHTesp.h"             // "DHT sensor library for ESPx" (beegee-tokyo) - reliable on ESP32
 
 // ---- config -----------------------------------------------------------------
 const char* WIFI_SSID = "Hotspot";
@@ -41,12 +41,16 @@ const int waterPin  = 34;                // ADC1 input-only: water level sensor
 const int firePin   = 35;                // ADC1 input-only: potentiometer = fire index
 const int ALARM_LED = 2;                 // onboard LED = local WATER alarm indicator
 
-#define DHTPIN  15
-#define DHTTYPE DHT11                     // DHT22; use DHT11 if that is your sensor
-DHT dht(DHTPIN, DHTTYPE);
+#define DHTPIN  21                        // bidirectional GPIO (NOT 34/35 - those are input-only)
+DHTesp dht;
 
-const int WATER_ALARM_LEVEL = 3000;             // averaged ADC above this = WATER ALARM
-const int WATER_WARN_LEVEL  = 2000;             // averaged ADC above this = WATER WARN
+// Last good DHT reading, kept across the frequent DHT11 checksum/timeout blips
+// so one bad frame does not blank the dashboard temp/humidity tiles.
+float lastTemp = NAN;
+float lastHum  = NAN;
+
+const int ALARM_LEVEL = 300;             // averaged ADC above this = WATER ALARM
+const int WARN_LEVEL  = 100;             // averaged ADC above this = WATER WARN
 
 // Fire is reported as a 0..100 index (pot mapped). The dashboard alarms above
 // 70 (see BASEMENT.FIRE in config.py); we mirror that here just for serial.
@@ -158,7 +162,7 @@ void setup() {
   pinMode(ALARM_LED, OUTPUT);
   digitalWrite(ALARM_LED, LOW);
 
-  dht.begin();
+  dht.setup(DHTPIN, DHTesp::DHT11);
   connectWifi();
 }
 
@@ -171,8 +175,13 @@ void loop() {
 
     int water = readStable(waterPin);    // median, 0..4095
     int fire  = map(readStable(firePin), 0, 4095, 0, 100);  // pot -> 0..100 fire index
-    float temp = dht.readTemperature();  // NAN on a failed read
-    float hum  = dht.readHumidity();
+    TempAndHumidity d = dht.getTempAndHumidity();
+    if (dht.getStatus() == DHTesp::ERROR_NONE) {   // keep last good on checksum/timeout
+      lastTemp = d.temperature;
+      lastHum  = d.humidity;
+    }
+    float temp = lastTemp;
+    float hum  = lastHum;
 
     const char* state = (water > ALARM_LEVEL) ? "ALARM"
                       : (water > WARN_LEVEL)  ? "WARN"

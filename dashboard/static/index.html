@@ -202,6 +202,32 @@
   .dlg label{display:block; font-size:12px; color:var(--muted); margin:10px 0 4px}
   .dlg input{width:100%}
   .err{color:#ffa198; font-size:12px; margin-top:10px; display:none}
+
+  /* ---------- fire alarm popup ---------- */
+  #fireModal{
+    position:fixed; inset:0; background:#000c; display:none;
+    align-items:center; justify-content:center; z-index:11000;
+  }
+  #fireModal.show{display:flex}
+  .fire-dlg{
+    background:#1a0d0d; border:2px solid #c62828; border-radius:14px;
+    padding:30px 34px; width:420px; max-width:90vw; text-align:center;
+    box-shadow:0 0 0 4px rgba(198,40,40,.25), 0 20px 60px #000a;
+    animation:firePulse 1s ease-in-out infinite;
+  }
+  @keyframes firePulse{
+    0%,100%{box-shadow:0 0 0 4px rgba(198,40,40,.20), 0 20px 60px #000a}
+    50%    {box-shadow:0 0 0 8px rgba(198,40,40,.45), 0 20px 60px #000a}
+  }
+  .fire-dlg .icon{font-size:52px; line-height:1; margin-bottom:8px}
+  .fire-dlg h2{margin:0 0 6px; font-size:22px; color:#ff6b6b; letter-spacing:.5px}
+  .fire-dlg p{margin:0 0 20px; font-size:14px; color:#f0c9c9}
+  .fire-dlg .lvl{font-weight:700; color:#fff}
+  .fire-dlg button{
+    width:100%; padding:12px; font-size:15px; font-weight:600;
+    background:#c62828; color:#fff; border:none; border-radius:8px; cursor:pointer;
+  }
+  .fire-dlg button:hover{background:#e53935}
 </style>
 </head>
 <body>
@@ -255,6 +281,15 @@
       <button type="submit" class="primary">Log in</button>
     </div>
   </form>
+</div>
+
+<div id="fireModal">
+  <div class="fire-dlg">
+    <div class="icon">🔥</div>
+    <h2>FIRE DETECTED</h2>
+    <p>BASEMENT · Fire sensor reading <span class="lvl" id="fireLevel">--</span>.<br>Evacuate the zone and verify on site.</p>
+    <button id="fireAck">Acknowledge &amp; DISARM</button>
+  </div>
 </div>
 
 <script>
@@ -857,6 +892,23 @@ function setSensor(key, value, state){
   vl.textContent = `${value} · ${state}`; vl.style.color = col;
   const dot = document.querySelector(`.tb[data-key="${key}"] .tdot`);
   if (dot) dot.style.background = col;
+
+  if (key === "BASEMENT.FIRE") updateFire(value, state);
+}
+
+// Center-screen fire popup. Shows while the fire sensor is in ALARM; the ack
+// button silences the node (DISARM) and hides it. It won't reappear for the
+// same event (fireAcked) until the reading drops out of ALARM.
+let fireAcked = false;
+function updateFire(value, state){
+  const m = $("#fireModal");
+  if (state === "ALARM"){
+    $("#fireLevel").textContent = value;
+    if (!fireAcked) m.classList.add("show");
+  } else {
+    fireAcked = false;
+    m.classList.remove("show");
+  }
 }
 
 let _bannerKey = null;
@@ -956,6 +1008,11 @@ $("#loginBtn").addEventListener("click", async () => {
 });
 $("#cancelBtn").addEventListener("click", () => {
   $("#modal").classList.remove("show"); $("#loginErr").style.display="none";
+});
+$("#fireAck").addEventListener("click", () => {
+  fireAcked = true;
+  $("#fireModal").classList.remove("show");
+  sendCommand("SYSTEM", "ALL", "DISARM");   // silence the node; needs login
 });
 $("#loginForm").addEventListener("submit", async e => {
   e.preventDefault();

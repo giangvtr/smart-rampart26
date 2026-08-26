@@ -71,6 +71,14 @@ SENSORS = [
               warn=None, alarm=(None, 0.5), vmin=0, vmax=1, latched=True, period_s=0.5),
     SensorDef("BASEMENT.WATER",   "BASEMENT", "Water level", "adc",
               warn=(None, 100), alarm=(None, 300), vmin=0, vmax=600, latched=True, period_s=2.0),
+    SensorDef("BASEMENT.TEMP",     "BASEMENT", "Temperature", "°C",
+              warn=(18, 26), alarm=(15, 30), vmin=10, vmax=40, period_s=3.0),
+    SensorDef("BASEMENT.HUMIDITY", "BASEMENT", "Humidity",    "%RH",
+              warn=(40, 60), alarm=(30, 70), vmin=20, vmax=90, period_s=3.0),
+    # Fire: potentiometer stand-in (0..100). Upper danger bound only; latched so
+    # a detected fire stays in ALARM until an explicit reset/override.
+    SensorDef("BASEMENT.FIRE",     "BASEMENT", "Fire",        "idx",
+              warn=(None, 50), alarm=(None, 70), vmin=0, vmax=100, latched=True, period_s=3.0),
 ]
 
 SENSORS_BY_KEY = {s.key: s for s in SENSORS}
@@ -107,6 +115,8 @@ FIELD_TO_SENSOR = {
     "motion": "MOTION",
     "water": "WATER",
     "level": "WATER",
+    "fire": "FIRE",
+    "pot": "FIRE",
 }
 
 
