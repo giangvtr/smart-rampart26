@@ -1292,17 +1292,29 @@ function setSensor(key, value, state){
 }
 
 // Center-screen fire popup. Shows while the fire sensor is in ALARM; the ack
-// button silences the node (DISARM) and hides it. It won't reappear for the
-// same event (fireAcked) until the reading drops out of ALARM.
+// button silences the node (DISARM) and hides it.
+//
+// The acknowledgement covers exactly ONE alarm episode. An episode ends when
+// either
+//   * the sensor leaves ALARM, or
+//   * the alarm is explicitly RESET (the server sends a "reset" event), or
+//   * the system is re-ARMED -- you asked to watch again, so a fire that is
+//     still burning has to say so again.
+// The RESET case matters because FIRE is latched: if the raw value is still
+// over the threshold it re-latches on the next reading, so the UI never sees a
+// non-ALARM sample and could not otherwise tell one episode from the next.
 let fireAcked = false;
+function endFireEpisode(){                 // re-arm the popup for the next one
+  fireAcked = false;
+  $("#fireModal").classList.remove("show");
+}
 function updateFire(value, state){
   const m = $("#fireModal");
   if (state === "ALARM"){
     $("#fireLevel").textContent = value;
     if (!fireAcked) m.classList.add("show");
   } else {
-    fireAcked = false;
-    m.classList.remove("show");
+    endFireEpisode();
   }
 }
 
@@ -1395,8 +1407,17 @@ function refreshBanner(){
   _bannerKey = key;
   const b = $("#banner");
   const alarmKey = [...new Set(alarming)].sort().join(",");
-  if (alarmKey){ b.className = "alarm"; b.textContent = "⚠  ACTIVE ALARM: " + alarmKey; }
-  else if (!SYSTEM_ARMED){ b.className = "disarmed"; b.textContent = "System disarmed (alarms suppressed for maintenance)"; }
+  // Disarmed outranks the alarm: while the system is suppressed the banner is
+  // amber whatever is firing, so nobody reads a flashing red bar as "we are
+  // responding to this". Re-arming re-runs this against the *current* states,
+  // so it goes red again only if something is still in ALARM right then.
+  if (!SYSTEM_ARMED){
+    b.className = "disarmed";
+    b.textContent = alarmKey
+      ? "System disarmed — alarm suppressed: " + alarmKey
+      : "System disarmed (alarms suppressed for maintenance)";
+  }
+  else if (alarmKey){ b.className = "alarm"; b.textContent = "⚠  ACTIVE ALARM: " + alarmKey; }
   else { b.className=""; b.textContent = "All clear"; }
 }
 
@@ -1685,7 +1706,15 @@ window.addEventListener("resize", () => {
     } else if (m.type === "anomaly"){ upsertAnomaly(m.anomaly); }
     else if (m.type === "connection"){ setConnected(m.connected); }
     else if (m.type === "log"){ addLog(m.msg, m.ts); }
-    else if (m.type === "system"){ SYSTEM_ARMED = m.armed !== false; }
+    else if (m.type === "reset"){
+      if (m.key === "BASEMENT.FIRE") endFireEpisode();
+      _bannerKey = null; refreshBanner();
+    }
+    else if (m.type === "system"){
+      SYSTEM_ARMED = m.armed !== false;
+      if (SYSTEM_ARMED) endFireEpisode();
+      _bannerKey = null; refreshBanner();     // armed state drives the colour
+    }
   };
   // `open` fires on every (re)connection, including the first -- skip that one,
   // since the bootstrap above already seeded the page.

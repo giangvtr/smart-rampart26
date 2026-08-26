@@ -225,6 +225,12 @@ class Hub:
         if zone == "SYSTEM" and sensor == "ALL" and action in ("ARM", "DISARM"):
             self.armed = action == "ARM"
             self._broadcast("system", {"armed": self.armed})
+        elif action == "RESET":
+            # Marks the end of one alarm *episode*. The browser needs this as an
+            # explicit event: a latched sensor whose raw value is still over the
+            # threshold re-latches on the very next reading, so the UI never
+            # observes a non-ALARM sample it could infer the boundary from.
+            self._broadcast("reset", {"key": f"{zone}.{sensor}"})
         self.storage.record_audit(user, action, f"{zone}.{sensor}")
         self._log(f"AUDIT: {user} issued {action} {zone}.{sensor}")
         return True
