@@ -282,6 +282,59 @@ ANOMALY = {
 }
 
 # --------------------------------------------------------------------------
+# Preservation Index / TWPI  (see preservation.py)
+# --------------------------------------------------------------------------
+# A live "how long will the collection last at these conditions" metric. The PI
+# is a chemical-decay model: organic supports (canvas sizing, glues, paper) age
+# faster when it is warm and humid. We use a self-contained Arrhenius form so it
+# runs offline with no data files:
+#
+#   PI(T,RH) = anchor_pi · (anchor_rh / RH)^m · exp( Ea/R · (1/T − 1/anchor_T) )
+#
+# calibrated so the "ideal" anchor reads ~anchor_pi years, T in Kelvin.
+#
+# IMPORTANT: these constants are a *documented approximation*, not certified IPI
+# values. They reproduce the two reference points the pitch quotes (18 °C/50 %RH
+# → ~100 yr, 26 °C/60 %RH → ~26 yr) and are monotonic in the right direction, but
+# should be tuned against published IPI PI tables before any real claim is made.
+PRESERVATION = {
+    "Ea_j_mol": 100_000.0,   # activation energy (~100 kJ/mol; typical organic decay)
+    "R": 8.314,              # gas constant, J/(mol·K)
+    "rh_exponent_m": 1.3,    # how strongly RH accelerates decay
+    "anchor_temp_c": 18.0,   # ideal-condition anchor the model is solved from
+    "anchor_rh": 50.0,
+    "anchor_pi_years": 100.0,
+    "min_rh": 5.0,           # clamp: avoids divide-by-zero / absurd PI as RH→0
+    "pi_max_years": 5000.0,  # display clamp for very cold/dry excursions
+    # colour bands for the dashboard chip (years of effective PI / TWPI)
+    "good_years": 75.0,      # >= good  -> green
+    "watch_years": 40.0,     # >= watch -> amber, below -> red
+}
+
+# --------------------------------------------------------------------------
+# Predictive HVAC control  (see hvac.py)
+# --------------------------------------------------------------------------
+# The dashboard decides a heating / dehumidification EFFORT (0..255) and drives
+# an HVAC LED on the ESP32 (PWM brightness = effort), riding back on the
+# /api/ingest reply. Effort is ramped gradually (never a step change) to respect
+# the EN 15757 short-term-fluctuation bandwidth — sharp swings stress canvas and
+# wood. Setpoints reuse the TEMP/HUMIDITY *warn* bands from SENSORS above.
+HVAC = {
+    "enabled": True,
+    "max_level": 255,            # matches an 8-bit LED PWM duty
+    "max_step_per_s": 12.0,      # ramp rate: effort units eased per second
+    "tick_s": 0.5,               # controller ramp/emit cadence
+    # How far outside the comfort band counts as "full effort". A humidity 15 %RH
+    # over the band, or temperature 6 °C off, calls for max conditioning.
+    "rh_full_scale": 15.0,       # %RH beyond the band -> full dehumidify effort
+    "temp_full_scale": 6.0,      # °C beyond the band -> full heat/cool effort
+    # Feedforward: weight given to the forecast outlook when nudging desired
+    # effort before indoor conditions actually move (0 = purely reactive).
+    "forecast_weight": 0.6,
+    "forecast_full_scale": 8.0,  # forecast °C/%RH swing that maps to full nudge
+}
+
+# --------------------------------------------------------------------------
 # Transport defaults (for the real Arduino path — serial / Bluetooth-classic)
 # --------------------------------------------------------------------------
 SERIAL_PORT = "COM3"    # Bluetooth-Classic (HC-05) shows up as a COM port too
