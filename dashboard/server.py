@@ -36,8 +36,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
 
 import anomaly
-import building
 import config
+import forecast as forecast_mod
+import hvac as hvac_mod
+import preservation as preservation_mod
 import security
 from core import Command
 from storage import Storage
@@ -45,18 +47,6 @@ from transports import HttpIngestSource, SerialSource, SimulatedSource  # noqa: 
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 SESSION_COOKIE = "mg_session"  # gates page/bootstrap/stream access (viewer or guard)
-
-# Windows takes MIME types from the registry, where a stray entry can report
-# .js as text/plain -- browsers then refuse to run <script type="module"> at all
-# (strict MIME checking), which would silently kill the three.js renderer on
-# someone else's laptop. Pin the types that matter.
-MIME_OVERRIDES = {
-    ".js": "text/javascript",
-    ".mjs": "text/javascript",
-    ".css": "text/css",
-    ".html": "text/html; charset=utf-8",
-    ".json": "application/json",
-}
 
 
 def make_source(name: str = "http"):
@@ -82,20 +72,25 @@ def make_source(name: str = "http"):
 # Hub: owns the source + storage, fans events out to connected browsers
 # --------------------------------------------------------------------------
 class Hub:
-    def __init__(self, source_name: str = "http"):
+    def __init__(self, source_name: str = "http", forecast_name: str = "sim"):
         self.storage = Storage()
         self.source = make_source(source_name)
-        # --demo-rooms with a real transport: the ESP32 owns the four real
-        # sensors, so the simulated museum needs its own ticker running beside
-        # it. `--source sim` already covers every sensor itself, so it gets no
-        # companion -- otherwise both would drive the same rooms.
-        self.demo_source = None
-        if config.DEMO_ROOMS and source_name != "sim":
-            self.demo_source = SimulatedSource(synthetic_only=True, owns_link=False)
         # Learns each stream's normal and flags the windows that break it. It
         # lives here rather than in the browser so every tab sees the same
         # verdicts, and so one opened late still gets what it missed.
         self.detector = anomaly.AnomalyEngine()
+        # Live "how long will the collection last at these conditions" metric
+        # (PI / TWPI), fed the same temp/humidity readings as the detector.
+        self.preservation = preservation_mod.PreservationEngine()
+        # Predictive HVAC: turns temp/RH + forecast into a conditioning effort
+        # that rides back on the ESP32's POST reply as an LED PWM duty. The
+        # forecast source is swappable (sim default = offline-safe).
+        self.forecast = forecast_mod.make_forecast(forecast_name)
+        self.hvac = hvac_mod.HvacController(
+            self.forecast,
+            on_state=lambda st: self._broadcast("hvac", {"hvac": st}),
+            on_forecast=lambda fo: self._broadcast("forecast", {"forecast": fo}),
+        )
         self.connected = False
         self.armed = True
         # New id per process. All server state (buffers, latches, tokens) lives
@@ -110,20 +105,16 @@ class Hub:
         self.source.reading_received.connect(self._on_reading)
         self.source.connection_changed.connect(self._on_connection)
         self.source.notice.connect(self._on_notice)
-        if self.demo_source is not None:
-            # Readings and notices only: connection state stays the real link's.
-            self.demo_source.reading_received.connect(self._on_reading)
-            self.demo_source.notice.connect(self._on_notice)
 
     def start(self) -> None:
+        self.forecast.start()
+        self.hvac.start()
         self.source.start()
-        if self.demo_source is not None:
-            self.demo_source.start()
 
     def stop(self) -> None:
         self.source.stop()
-        if self.demo_source is not None:
-            self.demo_source.stop()
+        self.hvac.stop()
+        self.forecast.stop()
         self.storage.close()
 
     # -- fan-out ----------------------------------------------------------
@@ -150,6 +141,13 @@ class Hub:
     # -- source callbacks (fire on the transport thread) -------------------
     def _on_reading(self, reading) -> None:
         prev = self.storage.record_reading(reading)
+        # feed the climate engines the same sample. Preservation returns a
+        # payload when both temp+humidity are known; HVAC just tracks the value
+        # and acts on its own ramp thread.
+        pres = self.preservation.feed(reading)
+        if pres is not None:
+            self._broadcast("preservation", {"preservation": pres})
+        self.hvac.feed(reading)
         # score before broadcasting, so the reading can carry the expected range
         # this very sample was judged against -- the chart draws them together
         records = self.detector.feed(reading)
@@ -166,39 +164,21 @@ class Hub:
             if not record["open"]:
                 self._log(f"ANOMALY [{record['zone']}·{record['label']}] "
                           f"{record['kindLabel']} ({record['severity']}) — "
-                          f"{record['message']}",
-                          room=config.SENSORS_BY_KEY[record["key"]].room)
+                          f"{record['message']}")
         if prev is not None:
-            sdef = config.SENSORS_BY_KEY[reading.key]
-            # Every transition matters on the real rig. For the 48 simulated
-            # sensors only report alarms, or their ordinary OK<->WARN flapping
-            # buries the real room's log.
-            if not sdef.synthetic or reading.state == config.STATE_ALARM:
-                where = sdef.room if sdef.synthetic else reading.zone
-                self._log(f"[{where}·{reading.sensor}] {prev} → {reading.state}"
-                          f" ({reading.value:g} {sdef.unit})", room=sdef.room)
+            unit = config.SENSORS_BY_KEY[reading.key].unit
+            self._log(f"[{reading.zone}·{reading.sensor}] {prev} → {reading.state}"
+                      f" ({reading.value:g} {unit})")
 
     def _on_connection(self, connected: bool) -> None:
         self.connected = connected
         self._broadcast("connection", {"connected": connected})
 
     def _on_notice(self, msg: str) -> None:
-        # Sources emit plain strings, but the scripted incidents prefix theirs
-        # with the room id ("[G_LOBBY] case disturbed -- simulated incident.").
-        # Recover it so those lines file under the room they happened in;
-        # anything else is system-wide.
-        room = None
-        if msg.startswith("["):
-            token = msg[1:].split("]", 1)[0]
-            if token in building.ROOMS_BY_ID:
-                room = token
-        self._log(msg, room=room)
+        self._log(msg)
 
-    def _log(self, msg: str, room: str | None = None) -> None:
-        """`room` scopes the line to one room in the UI's event log. Leave it
-        None for anything system-wide (logins, ARM/DISARM, the link going down)
-        -- those stay visible whichever room you are standing in."""
-        entry = {"ts": time.time(), "msg": msg, "room": room}
+    def _log(self, msg: str) -> None:
+        entry = {"ts": time.time(), "msg": msg}
         self._events.append(entry)
         del self._events[:-200]
         self._broadcast("log", entry)
@@ -209,16 +189,10 @@ class Hub:
         for s in config.SENSORS:
             buf = self.storage.buffers[s.key]
             times, values = buf.arrays()
-            # The real rig ships its full hour of history; 48 simulated sensors
-            # doing the same would put tens of MB of fiction in this JSON.
-            if s.synthetic:
-                times = times[-config.BOOTSTRAP_SYNTH_POINTS:]
-                values = values[-config.BOOTSTRAP_SYNTH_POINTS:]
             sensors.append({
                 "key": s.key, "zone": s.zone, "sensor": s.sensor, "label": s.label,
                 "unit": s.unit, "warn": s.warn, "alarm": s.alarm,
                 "vmin": s.vmin, "vmax": s.vmax, "latched": s.latched,
-                "room": s.room, "synthetic": s.synthetic,
                 "history": {"t": times, "v": values},
                 "state": buf.last_state or config.STATE_DISCONNECTED,
                 "value": buf.last_value,
@@ -229,15 +203,6 @@ class Hub:
             "bootId": self.boot_id,
             "appTitle": config.APP_TITLE,
             "sensors": sensors,
-            "building": {
-                "floors": building.FLOORS,
-                "rooms": [r.to_json() for r in building.ROOMS],
-                "floorW": building.FLOOR_W,
-                "floorD": building.FLOOR_D,
-                "wallH": building.WALL_H,
-                "liveRoom": config.LIVE_ROOM,
-                "shell": building.SHELL,
-            },
             "colors": config.STATE_COLORS,
             "timeScales": config.TIME_SCALES,
             "defaultScaleIndex": config.DEFAULT_TIME_SCALE_INDEX,
@@ -245,6 +210,9 @@ class Hub:
             "armed": self.armed,
             "anomalyEnabled": self.detector.enabled,
             "anomalies": self.detector.recent(60),
+            "preservation": self.preservation.snapshot(),
+            "hvac": self.hvac.state(),
+            "forecast": self.forecast.outlook(),
             "events": self._events[-50:],
             "serverTime": time.time(),
         }
@@ -282,12 +250,16 @@ class Hub:
         if not entry or entry["role"] != "guard":
             return False
         user = entry["user"]
-        cmd = Command(zone, sensor, action)
-        self.source.send_command(cmd)
-        if self.demo_source is not None:
-            # ARM/DISARM applies everywhere; a RESET only matters to whichever
-            # source owns that sensor, and each ignores keys it does not have.
-            self.demo_source.send_command(cmd)
+        # HVAC overrides never reach the alarm/command path -- they steer the
+        # controller's mode directly, and its effort rides back on ingest replies.
+        if zone == "SYSTEM" and sensor == "HVAC":
+            if not self.hvac.set_override(action):
+                return False
+            self._broadcast("hvac", {"hvac": self.hvac.state()})
+            self.storage.record_audit(user, f"HVAC_{action}", "SYSTEM.HVAC")
+            self._log(f"AUDIT: {user} set HVAC {action}")
+            return True
+        self.source.send_command(Command(zone, sensor, action))
         if zone == "SYSTEM" and sensor == "ALL" and action in ("ARM", "DISARM"):
             self.armed = action == "ARM"
             self._broadcast("system", {"armed": self.armed})
@@ -298,11 +270,7 @@ class Hub:
             # observes a non-ALARM sample it could infer the boundary from.
             self._broadcast("reset", {"key": f"{zone}.{sensor}"})
         self.storage.record_audit(user, action, f"{zone}.{sensor}")
-        # An override aimed at one sensor files under its room; SYSTEM/ALL
-        # (ARM/DISARM) is building-wide and stays unscoped.
-        target = config.SENSORS_BY_KEY.get(f"{zone}.{sensor}")
-        self._log(f"AUDIT: {user} issued {action} {zone}.{sensor}",
-                  room=target.room if target else None)
+        self._log(f"AUDIT: {user} issued {action} {zone}.{sensor}")
         return True
 
     def ingest(self, payload: dict) -> str:
@@ -432,7 +400,14 @@ class Handler(BaseHTTPRequestHandler):
             if not data or "zone" not in data:
                 return self._send_json({"error": "expected JSON with a 'zone'"}, 400)
             cmd = HUB.ingest(data)
-            return self._send_json({"ok": True, "cmd": cmd})
+            # The HVAC effort/mode is a *persistent* level, not a one-shot queued
+            # command, so it rides back on every reply alongside the alarm cmd.
+            zone = config.canonical_zone(data.get("zone", ""))
+            hstate = HUB.hvac.state()
+            return self._send_json({
+                "ok": True, "cmd": cmd,
+                "hvac": HUB.hvac.level_for(zone), "hvacMode": hstate["mode"],
+            })
         self._send_json({"error": "not found"}, 404)
 
     # -- static files -----------------------------------------------------
@@ -441,9 +416,7 @@ class Handler(BaseHTTPRequestHandler):
         full = os.path.normpath(os.path.join(STATIC_DIR, rel))
         if not full.startswith(STATIC_DIR) or not os.path.isfile(full):
             return self._send_json({"error": "not found"}, 404)
-        ctype = MIME_OVERRIDES.get(os.path.splitext(full)[1].lower())
-        if ctype is None:
-            ctype = mimetypes.guess_type(full)[0] or "application/octet-stream"
+        ctype = mimetypes.guess_type(full)[0] or "application/octet-stream"
         with open(full, "rb") as fh:
             body = fh.read()
         self.send_response(200)
@@ -486,25 +459,18 @@ def main() -> int:
     parser.add_argument("--source", choices=["http", "sim", "serial"], default="http",
                         help="data source: http=ESP32 WiFi (default), "
                              "sim=fake data no hardware, serial=USB/Bluetooth Arduino")
-    parser.add_argument("--demo-rooms", action="store_true",
-                        help="populate the 11 simulated museum rooms in the 3D "
-                             "building view (49 fake sensors + scripted "
-                             "incidents). Off by default: without it every "
-                             "reading on the dashboard is a real measurement.")
+    parser.add_argument("--forecast", choices=["sim", "http", "off"], default="sim",
+                        help="HVAC weather feedforward: sim=synthetic outlook "
+                             "(default, offline), http=Open-Meteo (needs internet), "
+                             "off=purely reactive")
     args = parser.parse_args()
 
-    # Must happen before Hub(): Storage allocates one ring buffer per sensor.
-    if args.demo_rooms:
-        added = config.enable_demo_rooms()
-        print(f"Demo rooms ON -- {added} simulated sensors across "
-              f"{len(building.ROOMS) - 1} fictional rooms.")
-
-    HUB = Hub(args.source)
+    HUB = Hub(args.source, args.forecast)
     HUB.start()
     httpd = ThreadingHTTPServer((args.host, args.port), Handler)
     httpd.daemon_threads = True
     print(f"{config.APP_NAME} web dashboard -> http://{args.host}:{args.port}"
-          f"  [source: {args.source}]")
+          f"  [source: {args.source}, forecast: {args.forecast}]")
     print("Press Ctrl+C to stop.")
     try:
         httpd.serve_forever()

@@ -65,12 +65,7 @@ class Storage:
         self._lock = threading.Lock()
         self._init_schema()
 
-        # simulated rooms keep a much shorter history than the real rig
-        self.buffers: dict[str, RingBuffer] = {
-            s.key: RingBuffer(config.SYNTH_RING_POINTS if s.synthetic
-                              else config.RING_BUFFER_POINTS)
-            for s in config.SENSORS
-        }
+        self.buffers: dict[str, RingBuffer] = {s.key: RingBuffer() for s in config.SENSORS}
         self._last_state: dict[str, str] = {}
         self._csv_day: str | None = None
         self._csv_file = None
@@ -122,14 +117,6 @@ class Storage:
         prev = self._last_state.get(r.key)
         changed = prev is not None and prev != r.state
         self._last_state[r.key] = r.state
-
-        # Simulated rooms are buffered and streamed, but never persisted. Two
-        # reasons: the log stays a record of the REAL rig only, and this method
-        # commits + fsyncs per reading -- at ~50 simulated sensors that would be
-        # ~60 fsyncs/sec of fiction.
-        sdef = config.SENSORS_BY_KEY.get(r.key)
-        if sdef is not None and sdef.synthetic:
-            return prev if changed else None
 
         with self._lock:
             self._db.execute(

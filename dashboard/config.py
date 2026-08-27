@@ -7,8 +7,6 @@ one-file job.
 """
 from __future__ import annotations
 
-import building
-
 # --------------------------------------------------------------------------
 # Sensor / zone model
 # --------------------------------------------------------------------------
@@ -43,9 +41,7 @@ STATE_COLORS = {
 # means an alarm stays until an explicit reset/override (water, motion).
 class SensorDef:
     def __init__(self, key, zone, label, unit, warn, alarm,
-                 vmin, vmax, latched=False, period_s=2.0,
-                 room=None, synthetic=False, kind="analog",
-                 detect_anomalies=True):
+                 vmin, vmax, latched=False, period_s=2.0, detect_anomalies=True):
         self.key = key            # unique id, e.g. "BASEMENT.TEMP"
         self.zone = zone
         self.label = label
@@ -56,16 +52,10 @@ class SensorDef:
         self.vmax = vmax
         self.latched = latched
         self.period_s = period_s
-        # `room` is a DISPLAY grouping for the 3D building view; `zone` stays the
-        # wire token the node sends, so adding rooms never touched the protocol.
-        self.room = room or zone
-        # synthetic = simulated demo room, never written to SQLite/CSV
-        self.synthetic = synthetic
-        self.kind = kind          # "analog" (wanders) or "event" (blips)
         # Whether anomaly.py should watch this stream. Set False for on/off
         # sensors: a 0/1 signal has no "normal spread" to learn, so every trip
-        # would score as an infinite deviation. All four real sensors are
-        # continuous; the simulated on/off ones opt out below.
+        # would score as an infinite deviation. All four current sensors are
+        # continuous, so none of them need it -- kept for the next on/off one.
         self.detect_anomalies = detect_anomalies
 
     @property
@@ -79,94 +69,21 @@ class SensorDef:
 # and motion in the exhibition hall) was dropped: no firmware ever sent it, so
 # its tiles only ever showed DISCONNECTED. Adding a second zone back is just
 # more entries here plus a ZONE_ALIASES line -- nothing else is zone-aware.
-#
-# The scenario puts the physical rig in one basement room of the 3D building,
-# hence room=LIVE_ROOM on all four. These are the only NON-synthetic sensors;
-# the simulated museum rooms are opt-in, see enable_demo_rooms() below.
-LIVE_ROOM = "B1_ARCHIVE"
-
 SENSORS = [
     SensorDef("BASEMENT.WATER",   "BASEMENT", "Water level", "adc",
-              warn=(None, 100), alarm=(None, 300), vmin=0, vmax=600, latched=True, period_s=2.0,
-              room=LIVE_ROOM),
+              warn=(None, 100), alarm=(None, 300), vmin=0, vmax=600, latched=True, period_s=2.0),
     SensorDef("BASEMENT.TEMP",     "BASEMENT", "Temperature", "°C",
-              warn=(18, 26), alarm=(15, 30), vmin=10, vmax=40, period_s=3.0, room=LIVE_ROOM),
+              warn=(18, 26), alarm=(15, 30), vmin=10, vmax=40, period_s=3.0),
     SensorDef("BASEMENT.HUMIDITY", "BASEMENT", "Humidity",    "%RH",
-              warn=(40, 60), alarm=(30, 70), vmin=20, vmax=90, period_s=3.0, room=LIVE_ROOM),
+              warn=(40, 60), alarm=(30, 70), vmin=20, vmax=90, period_s=3.0),
     # Fire: potentiometer stand-in (0..100). Upper danger bound only; latched so
     # a detected fire stays in ALARM until an explicit reset/override.
     SensorDef("BASEMENT.FIRE",     "BASEMENT", "Fire",        "idx",
-              warn=(None, 50), alarm=(None, 70), vmin=0, vmax=100, latched=True, period_s=3.0,
-              room=LIVE_ROOM),
+              warn=(None, 50), alarm=(None, 70), vmin=0, vmax=100, latched=True, period_s=3.0),
 ]
-
-# The four above are the real rig, and by default they are ALL that exists.
-LIVE_SENSORS = list(SENSORS)
 
 SENSORS_BY_KEY = {s.key: s for s in SENSORS}
 ZONES = sorted({s.zone for s in SENSORS})
-
-# --------------------------------------------------------------------------
-# Simulated museum rooms -- opt-in (server.py --demo-rooms)
-# --------------------------------------------------------------------------
-# The 3D building has 12 rooms; exactly one of them (LIVE_ROOM) is the physical
-# rig. The other 11 are fiction, so they are NOT created unless someone asks for
-# them: a default run has four sensors and every reading on the dashboard is a
-# real measurement. With --demo-rooms the rooms are populated from
-# building.ROOMS and the 3D view fills with plausible activity for a demo.
-#
-# This is a startup switch, not a runtime toggle -- Storage allocates a ring
-# buffer per sensor at construction, so it must be decided before the Hub is
-# built. server.py calls this from main() before constructing Hub.
-DEMO_ROOMS = False
-
-
-def enable_demo_rooms() -> int:
-    """Populate the 11 simulated rooms. Returns how many sensors were added.
-
-    Idempotent: calling it twice is a no-op, so an accidental second call
-    cannot double up the sensor list.
-    """
-    global DEMO_ROOMS
-    if DEMO_ROOMS:
-        return 0
-    DEMO_ROOMS = True
-
-    added = 0
-    for room in building.ROOMS:
-        for tok in room.sensors:
-            t = building.SENSOR_TYPES[tok]
-            SENSORS.append(SensorDef(
-                f"{room.id}.{tok}", room.id, t["label"], t["unit"],
-                warn=t["warn"], alarm=t["alarm"], vmin=t["vmin"], vmax=t["vmax"],
-                latched=t["latched"], period_s=t["period_s"],
-                room=room.id, synthetic=True, kind=t["kind"],
-                # same rule as the real rig: an on/off stream has no spread for
-                # anomaly.py to learn from, so only the analog kinds are watched
-                detect_anomalies=(t["kind"] == "analog"),
-            ))
-            added += 1
-
-    SENSORS_BY_KEY.update({s.key: s for s in SENSORS})
-    ZONES[:] = sorted({s.zone for s in SENSORS})
-    return added
-
-
-def fmt_value(sdef: "SensorDef", value: float) -> str:
-    """A reading, formatted for a human.
-
-    On/off sensors read Yes/No -- "1 bool" makes the reader translate before
-    they can act on it. The web UI has the same rule in fmtValue().
-    """
-    if value is None:
-        return "--"
-    if sdef.unit == "bool":
-        return "Yes" if value >= 0.5 else "No"
-    return f"{value:g} {sdef.unit}"
-
-
-def sensors_in_room(room_id: str) -> list[SensorDef]:
-    return [s for s in SENSORS if s.room == room_id]
 
 
 def sensor_lookup(zone: str, sensor: str) -> SensorDef | None:
@@ -212,12 +129,6 @@ def canonical_zone(zone: str) -> str:
 # how much history to keep in memory per sensor (points). At the fastest 0.5s
 # period, 7200 points ~= 1 hour.
 RING_BUFFER_POINTS = 7200
-
-# Simulated rooms get a much shorter history: ~50 sensors x 7200 points is a lot
-# of RAM for data nobody will scroll back through, and the whole lot has to be
-# JSON-encoded on every bootstrap.
-SYNTH_RING_POINTS = 900
-BOOTSTRAP_SYNTH_POINTS = 300
 
 # time-scale presets for the per-panel time-scale selector: (label, seconds or None=all)
 TIME_SCALES = [
@@ -279,6 +190,59 @@ ANOMALY = {
                                  # its own calls every wander a trend)
     # -- retention --
     "keep": 200,                 # anomalies kept in memory per process run
+}
+
+# --------------------------------------------------------------------------
+# Preservation Index / TWPI  (see preservation.py)
+# --------------------------------------------------------------------------
+# A live "how long will the collection last at these conditions" metric. The PI
+# is a chemical-decay model: organic supports (canvas sizing, glues, paper) age
+# faster when it is warm and humid. We use a self-contained Arrhenius form so it
+# runs offline with no data files:
+#
+#   PI(T,RH) = anchor_pi · (anchor_rh / RH)^m · exp( Ea/R · (1/T − 1/anchor_T) )
+#
+# calibrated so the "ideal" anchor reads ~anchor_pi years, T in Kelvin.
+#
+# IMPORTANT: these constants are a *documented approximation*, not certified IPI
+# values. They reproduce the two reference points the pitch quotes (18 °C/50 %RH
+# → ~100 yr, 26 °C/60 %RH → ~26 yr) and are monotonic in the right direction, but
+# should be tuned against published IPI PI tables before any real claim is made.
+PRESERVATION = {
+    "Ea_j_mol": 100_000.0,   # activation energy (~100 kJ/mol; typical organic decay)
+    "R": 8.314,              # gas constant, J/(mol·K)
+    "rh_exponent_m": 1.3,    # how strongly RH accelerates decay
+    "anchor_temp_c": 18.0,   # ideal-condition anchor the model is solved from
+    "anchor_rh": 50.0,
+    "anchor_pi_years": 100.0,
+    "min_rh": 5.0,           # clamp: avoids divide-by-zero / absurd PI as RH→0
+    "pi_max_years": 5000.0,  # display clamp for very cold/dry excursions
+    # colour bands for the dashboard chip (years of effective PI / TWPI)
+    "good_years": 75.0,      # >= good  -> green
+    "watch_years": 40.0,     # >= watch -> amber, below -> red
+}
+
+# --------------------------------------------------------------------------
+# Predictive HVAC control  (see hvac.py)
+# --------------------------------------------------------------------------
+# The dashboard decides a heating / dehumidification EFFORT (0..255) and drives
+# an HVAC LED on the ESP32 (PWM brightness = effort), riding back on the
+# /api/ingest reply. Effort is ramped gradually (never a step change) to respect
+# the EN 15757 short-term-fluctuation bandwidth — sharp swings stress canvas and
+# wood. Setpoints reuse the TEMP/HUMIDITY *warn* bands from SENSORS above.
+HVAC = {
+    "enabled": True,
+    "max_level": 255,            # matches an 8-bit LED PWM duty
+    "max_step_per_s": 12.0,      # ramp rate: effort units eased per second
+    "tick_s": 0.5,               # controller ramp/emit cadence
+    # How far outside the comfort band counts as "full effort". A humidity 15 %RH
+    # over the band, or temperature 6 °C off, calls for max conditioning.
+    "rh_full_scale": 15.0,       # %RH beyond the band -> full dehumidify effort
+    "temp_full_scale": 6.0,      # °C beyond the band -> full heat/cool effort
+    # Feedforward: weight given to the forecast outlook when nudging desired
+    # effort before indoor conditions actually move (0 = purely reactive).
+    "forecast_weight": 0.6,
+    "forecast_full_scale": 8.0,  # forecast °C/%RH swing that maps to full nudge
 }
 
 # --------------------------------------------------------------------------

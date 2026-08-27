@@ -69,8 +69,7 @@ class SensorPanel(QWidget):
         self.plot = pg.PlotWidget()
         self.plot.showGrid(x=True, y=True, alpha=0.2)
         self.plot.setYRange(sensor_def.vmin, sensor_def.vmax)
-        # an on/off stream has no unit worth printing on an axis
-        self.plot.setLabel("left", "" if sensor_def.unit == "bool" else sensor_def.unit)
+        self.plot.setLabel("left", sensor_def.unit)
         self.plot.setMouseEnabled(x=True, y=False)
         self.curve = self.plot.plot([], [], pen=pg.mkPen(_qcolor(config.STATE_OK), width=2))
         self._add_threshold_bands()
@@ -163,7 +162,7 @@ class SensorPanel(QWidget):
         state = self.buffer.last_state or config.STATE_OK
         last = self.buffer.last_value
         if last is not None:
-            self.value_label.setText(config.fmt_value(self.sdef, last))
+            self.value_label.setText(f"{last:g} {self.sdef.unit}")
         if state != self._state:
             self._apply_state_style(state)
 
@@ -190,7 +189,7 @@ class StatusPanel(QWidget):
         layout = QGridLayout(self)
         layout.setContentsMargins(6, 6, 6, 6)
         self.tiles: dict[str, QLabel] = {}
-        for row, sdef in enumerate(config.LIVE_SENSORS):
+        for row, sdef in enumerate(config.SENSORS):
             name = QLabel(f"{sdef.zone} · {sdef.label}")
             tile = QLabel("--")
             tile.setAlignment(Qt.AlignCenter)
@@ -298,7 +297,7 @@ class ControlPanel(QWidget):
         root.addWidget(QLabel("Acknowledge / clear latched alarm:"))
         # per-latching-sensor reset buttons
         self._ack_buttons: list[QPushButton] = []
-        for sdef in config.LIVE_SENSORS:
+        for sdef in config.SENSORS:
             if not sdef.latched:
                 continue
             btn = QPushButton(f"Reset {sdef.zone} · {sdef.label}")
