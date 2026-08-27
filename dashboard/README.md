@@ -1,6 +1,6 @@
-# MuseumGuard — Dashboard
+# Smart Rampart — Dashboard
 
-Monitoring station for the MuseumGuard sensor rig: four Basement sensors —
+Monitoring station for the Smart Rampart sensor rig: four Basement sensors —
 **water level, temperature, humidity and fire**. Live charts in a 2x2 of
 floating, snappable windows — or a phone-friendly **Simple** board of
 colour-coded value boxes — colour-coded alarm states, a flashing alarm banner,

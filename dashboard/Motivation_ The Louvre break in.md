@@ -113,7 +113,7 @@ Components we are using:
 
 # Specification v1
 
-# **MuseumGuard — Environmental & Security Monitoring System**
+# **Smart Rampart — Environmental & Security Monitoring System**
 
 ### **Requirements & Specification Document (MVP, 10-hour hackathon build, 5-person team)**
 
@@ -125,7 +125,7 @@ Modification: The smoke detector and fire detector is not available
 
 ## **1\. Executive Summary**
 
-MuseumGuard is a low-cost, sensor-based monitoring system built on an **Arduino** (or **Raspberry Pi Pico**) that protects museum artifacts and spaces by continuously watching the environmental and security conditions that most commonly cause damage or loss: unstable temperature/humidity, excess light exposure, water intrusion, fire, and unauthorized intrusion after hours.
+Smart Rampart is a low-cost, sensor-based monitoring system built on an **Arduino** (or **Raspberry Pi Pico**) that protects museum artifacts and spaces by continuously watching the environmental and security conditions that most commonly cause damage or loss: unstable temperature/humidity, excess light exposure, water intrusion, fire, and unauthorized intrusion after hours.
 
 The microcontroller is connected to a windows machine via a serial port to send data. The windows collect and display on a monitor (for a security agent), with some button to overwrite (like turn off alarm by login in etc)
 
@@ -339,7 +339,7 @@ Additional **security sub-state** (independent of environmental FSM, gates FR-MO
 
 # Spec v2
 
-# **MuseumGuard — Environmental & Security Monitoring System**
+# **Smart Rampart — Environmental & Security Monitoring System**
 
 ### **Requirements & Specification Document (MVP, 10-hour hackathon build, 5-person team)**
 
@@ -354,7 +354,7 @@ Additional **security sub-state** (independent of environmental FSM, gates FR-MO
 
 ## **1\. Executive Summary**
 
-MuseumGuard is a low-cost, sensor-based monitoring system built on an **Arduino** (or **Raspberry Pi Pico**) that protects museum artifacts and spaces by continuously watching the conditions that most commonly cause damage or loss: unstable temperature/humidity, excess light exposure, water intrusion, and unauthorized intrusion after hours.
+Smart Rampart is a low-cost, sensor-based monitoring system built on an **Arduino** (or **Raspberry Pi Pico**) that protects museum artifacts and spaces by continuously watching the conditions that most commonly cause damage or loss: unstable temperature/humidity, excess light exposure, water intrusion, and unauthorized intrusion after hours.
 
 The microcontroller is connected to a **Windows machine via USB serial**. It streams structured sensor readings and alarm events over that serial link. The Windows machine runs a **dashboard application** that a security agent watches on a monitor: it shows live values per zone, flags any active alarm, and lets the agent **acknowledge/override (silence) an alarm**, gated behind a simple **login**, so there's an auditable "who cleared this" step instead of anyone being able to walk up and disable the alarm at the sensor node itself.
 

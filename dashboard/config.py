@@ -1,5 +1,5 @@
 """
-MuseumGuard dashboard — central configuration.
+Smart Rampart dashboard — central configuration.
 
 Single source of truth for zones, sensors, thresholds, colors, timing and the
 serial defaults. Everything else imports from here so tuning the demo is a
@@ -349,5 +349,5 @@ CSV_DIR = "logs"        # a daily CSV per run day lands here
 # --------------------------------------------------------------------------
 # App identity
 # --------------------------------------------------------------------------
-APP_NAME = "MuseumGuard"
-APP_TITLE = "MuseumGuard — Environmental & Security Monitoring"
+APP_NAME = "Smart Rampart"
+APP_TITLE = "Smart Rampart — Environmental & Security Monitoring"

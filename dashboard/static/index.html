@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>MuseumGuard</title>
+<title>Smart Rampart</title>
 <style>
   :root{
     --bg:#0f1216; --panel:#171c22; --panel-2:#1e242c; --line:#2a323c;
@@ -510,7 +510,7 @@
 
 <header>
   <button id="sideToggle" title="Show / hide the sidebar">‹</button>
-  <div class="brand">🏛<span class="bn"> MuseumGuard</span></div>
+  <div class="brand">🏛<span class="bn"> Smart Rampart</span></div>
   <div class="lgroup">
     <div class="seg" id="viewSeg" title="Switch between the 3D building, live graphs and plain value boxes">
       <button id="viewBuilding">🏛<span class="lbl"> Building</span></button>
@@ -2258,7 +2258,7 @@ function ingestBuilding(boot){
 (async function(){
   BOOT = await (await fetch("/api/bootstrap")).json();
   SYSTEM_ARMED = BOOT.armed !== false;
-  document.title = "MuseumGuard";
+  document.title = "Smart Rampart";
   COLORS = BOOT.colors; SCALES = BOOT.timeScales;
   for (const d of BOOT.sensors) STATES.set(d.key, {value: d.value, state: d.state});
   ingestBuilding(BOOT);

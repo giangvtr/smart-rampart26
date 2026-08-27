@@ -1,4 +1,4 @@
-# MuseumGuard — End-to-End Test Runbook
+# Smart Rampart — End-to-End Test Runbook
 
 Environmental & security monitoring: an **ESP32 node (WiFi)** POSTs sensor
 readings to a **dashboard server on the laptop**; the dashboard shows live

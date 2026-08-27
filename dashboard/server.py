@@ -1,5 +1,5 @@
 """
-MuseumGuard dashboard -- web frontend (alternative to the Qt desktop app).
+Smart Rampart dashboard -- web frontend (alternative to the Qt desktop app).
 
 Same features, nicer UI, better graph controls. Uses **only the Python standard
 library** on the server side: no Flask, no FastAPI, no npm, no CDN. The browser
@@ -361,7 +361,7 @@ HUB: Hub | None = None
 # --------------------------------------------------------------------------
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
-    server_version = "MuseumGuard"
+    server_version = "Smart Rampart"
 
     def log_message(self, fmt, *args):  # quieter console
         pass
@@ -523,7 +523,7 @@ class Handler(BaseHTTPRequestHandler):
 
 def main() -> int:
     global HUB
-    parser = argparse.ArgumentParser(description="MuseumGuard web dashboard")
+    parser = argparse.ArgumentParser(description="Smart Rampart web dashboard")
     # localhost by default: the login posts a plaintext password over HTTP, so
     # do not expose this beyond the demo machine without TLS in front of it.
     parser.add_argument("--host", default="127.0.0.1")

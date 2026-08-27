@@ -1,4 +1,4 @@
-// MuseumGuard - MINIMAL test: WiFi + water sensor + dashboard POST + DISARM.
+// Smart Rampart - MINIMAL test: WiFi + water sensor + dashboard POST + DISARM.
 //
 // Purpose: prove the full round trip, INCLUDING the command that rides back on
 // the POST reply. The node reads the analog water-level sensor every 3s, POSTs
@@ -153,7 +153,7 @@ void postReading(int water, float temp, float humidity, int fire, const char* st
 void setup() {
   Serial.begin(115200);
   delay(500);
-  Serial.println("=== MuseumGuard test: water + DHT + fire + DISARM ===");
+  Serial.println("=== Smart Rampart test: water + DHT + fire + DISARM ===");
 
   pinMode(ALARM_LED, OUTPUT);
   digitalWrite(ALARM_LED, LOW);
