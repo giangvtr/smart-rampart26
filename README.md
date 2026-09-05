@@ -47,10 +47,6 @@ Smart Rampart is a **two-tier monitoring system**:
   lets an authenticated guard **ARM / DISARM / Reset** alarms, and runs the predictive brains
   (HVAC feedforward, preservation index, anomaly detection).
 
-Everything runs **on one local WiFi network with no internet required** — the one exception is
-an *optional* weather-forecast pull from the free Open-Meteo API, which degrades gracefully to a
-built-in simulator when offline.
-
 <p align="center">
   <img src="media/archcitecture.png" alt="System architecture" width="88%">
 </p>
@@ -59,7 +55,7 @@ There are two independent microcontroller roles:
 
 | Node | Board | Watches / does |
 |---|---|---|
-| **Environmental monitoring** | **ESP32** (WiFi) | Water level, temperature, humidity, fire index → POSTs to the dashboard over WiFi; drives HVAC effort, ventilation, and sound/light alarms. A **Raspberry Pi Pico W** can act as a second water node. |
+| **Environmental monitoring** | **ESP32** (WiFi) | Water level, temperature, humidity, fire index → POSTs to the dashboard over WiFi; drives HVAC effort, ventilation, and sound/light alarms. |
 | **Room access control** | **Arduino Uno** | A 4×4 **keypad** unlocks a door via a **servo**; an I²C **LCD** and RGB LED show granted/denied. Standalone, local. |
 
 ## Features
@@ -76,7 +72,7 @@ There are two independent microcontroller roles:
 - Turns the temp/humidity stream into a single conditioning **EFFORT** and **MODE**
   (Heat / Cool / Dehumidify / Humidify), delivered to the ESP32 as an LED-PWM duty on the POST reply.
 - **Feedforward**: pulls the **48-hour outdoor outlook** (Open-Meteo, no API key) and acts
-  *before* indoor conditions move — pre-emptive dehumidify ahead of a humid front.
+  *before* indoor conditions move, pre-emptive dehumidify ahead of a humid front.
 - **Passive buffering**: when the outdoor trend will fix things on its own, it eases off rather
   than fighting the weather.
 - **Gradual setpoint ramping**: the output never steps — a smooth ramp respects the short-term
@@ -97,33 +93,12 @@ There are two independent microcontroller roles:
 - **Two-tier login**: a `viewer` password to open the dashboard, a `guard` password to unlock
   overrides. PBKDF2-hashed, per-IP rate-limited.
 - **Zero-install logging**: SQLite + a daily CSV mirror, plus an audit trail of logins and overrides.
-- **No dependencies** for the web UI — Python standard library only, no npm, no CDN, no charting
-  library (charts are hand-drawn on `<canvas>`), so it works with no internet at the venue.
+- **No dependencies** for the web UI — Python standard library only, no npm, no CDN, no charting.
 
 <p align="center">
   <img src="media/graph.png" alt="Graphs view — live charts, HVAC, preservation index" width="49%">
   <img src="media/building.png" alt="3D building view" width="49%">
 </p>
-
-## How it fits together
-
-```
-  ESP32 (water, fire, temp, humidity) ──POST readings──▶ ┐
-  Pico W (optional 2nd water node) ────POST──────────────▶ │
-                                  ◀──── cmd on reply ────── ┘
-                         Laptop: dashboard/server.py  ──▶  browser
-                                 (predictive HVAC · preservation · anomaly)
-                                          │
-                                          └── Open-Meteo API (optional, forecast)
-
-  Arduino Uno + keypad ──▶ servo door lock + LCD        (standalone room access)
-```
-
-Nodes are HTTP **clients**; the laptop is the **server**. Commands ride *back* on each node's
-POST reply, so there's no inbound connection to the node — it works behind NAT and in Wokwi.
-The input layer is deliberately **transport-agnostic** (`core.py` / `transports.py`): the same
-dashboard runs against real WiFi hardware (`--source http`, the default), a built-in simulator
-(`--source sim`), or a USB/Bluetooth serial node (`--source serial`) with no code changes.
 
 ## File structure
 
@@ -182,4 +157,4 @@ breaking glass.
 
 ---
 
-<p align="center"><sub>Hackathon Team 1 · Safeguarding our Heritage 🏛️</sub></p>
+<p align="center"><sub>Hackathon Team 1 · Safeguarding our Heritage</sub></p>
