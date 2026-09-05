@@ -1,7 +1,7 @@
 """
 Unsupervised anomaly detection over the live sensor streams.
 
-This is the MuseumGuard equivalent of LoadRunner Analysis' anomaly detection:
+This is the Smart Rampart equivalent of LoadRunner Analysis' anomaly detection:
 nothing here is configured per-sensor by hand. The engine *learns* what normal
 looks like for each stream from the stream itself, then flags the time windows
 that stop matching it. Those windows are shaded on the graph and listed in the

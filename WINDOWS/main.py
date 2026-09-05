@@ -1,4 +1,4 @@
-# MuseumGuard — Raspberry Pi Pico W water-level node (MicroPython, WiFi -> HTTP).
+# Smart Rampart — Raspberry Pi Pico W water-level node (MicroPython, WiFi -> HTTP).
 #
 # Flash: install MicroPython on the Pico W, open Thonny, save THIS as main.py.
 #

@@ -1,5 +1,5 @@
 """
-MuseumGuard dashboard — entry point.
+Smart Rampart dashboard — entry point.
 
 Builds the main window (a pyqtgraph DockArea of movable/resizable/floatable
 panels), picks a data Source, and wires everything together:

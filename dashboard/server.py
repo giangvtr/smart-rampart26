@@ -1,5 +1,5 @@
 """
-MuseumGuard dashboard -- web frontend (alternative to the Qt desktop app).
+Smart Rampart dashboard -- web frontend (alternative to the Qt desktop app).
 
 Same features, nicer UI, better graph controls. Uses **only the Python standard
 library** on the server side: no Flask, no FastAPI, no npm, no CDN. The browser
@@ -38,6 +38,9 @@ from urllib.parse import urlparse
 import anomaly
 import building
 import config
+import forecast as forecast_mod
+import hvac as hvac_mod
+import preservation as preservation_mod
 import security
 from core import Command
 from storage import Storage
@@ -82,7 +85,7 @@ def make_source(name: str = "http"):
 # Hub: owns the source + storage, fans events out to connected browsers
 # --------------------------------------------------------------------------
 class Hub:
-    def __init__(self, source_name: str = "http"):
+    def __init__(self, source_name: str = "http", forecast_name: str = "sim"):
         self.storage = Storage()
         self.source = make_source(source_name)
         # --demo-rooms with a real transport: the ESP32 owns the four real
@@ -96,6 +99,18 @@ class Hub:
         # lives here rather than in the browser so every tab sees the same
         # verdicts, and so one opened late still gets what it missed.
         self.detector = anomaly.AnomalyEngine()
+        # Live "how long will the collection last at these conditions" metric
+        # (PI / TWPI), fed the same temp/humidity readings as the detector.
+        self.preservation = preservation_mod.PreservationEngine()
+        # Predictive HVAC: turns temp/RH + forecast into a conditioning effort
+        # that rides back on the ESP32's POST reply as an LED PWM duty. The
+        # forecast source is swappable (sim default = offline-safe).
+        self.forecast = forecast_mod.make_forecast(forecast_name)
+        self.hvac = hvac_mod.HvacController(
+            self.forecast,
+            on_state=lambda st: self._broadcast("hvac", {"hvac": st}),
+            on_forecast=lambda fo: self._broadcast("forecast", {"forecast": fo}),
+        )
         self.connected = False
         self.armed = True
         # New id per process. All server state (buffers, latches, tokens) lives
@@ -116,6 +131,8 @@ class Hub:
             self.demo_source.notice.connect(self._on_notice)
 
     def start(self) -> None:
+        self.forecast.start()
+        self.hvac.start()
         self.source.start()
         if self.demo_source is not None:
             self.demo_source.start()
@@ -124,6 +141,8 @@ class Hub:
         self.source.stop()
         if self.demo_source is not None:
             self.demo_source.stop()
+        self.hvac.stop()
+        self.forecast.stop()
         self.storage.close()
 
     # -- fan-out ----------------------------------------------------------
@@ -150,6 +169,13 @@ class Hub:
     # -- source callbacks (fire on the transport thread) -------------------
     def _on_reading(self, reading) -> None:
         prev = self.storage.record_reading(reading)
+        # feed the climate engines the same sample. Preservation returns a
+        # payload when both temp+humidity are known; HVAC just tracks the value
+        # and acts on its own ramp thread.
+        pres = self.preservation.feed(reading)
+        if pres is not None:
+            self._broadcast("preservation", {"preservation": pres})
+        self.hvac.feed(reading)
         # score before broadcasting, so the reading can carry the expected range
         # this very sample was judged against -- the chart draws them together
         records = self.detector.feed(reading)
@@ -245,6 +271,9 @@ class Hub:
             "armed": self.armed,
             "anomalyEnabled": self.detector.enabled,
             "anomalies": self.detector.recent(60),
+            "preservation": self.preservation.snapshot(),
+            "hvac": self.hvac.state(),
+            "forecast": self.forecast.outlook(),
             "events": self._events[-50:],
             "serverTime": time.time(),
         }
@@ -282,6 +311,15 @@ class Hub:
         if not entry or entry["role"] != "guard":
             return False
         user = entry["user"]
+        # HVAC overrides never reach the alarm/command path -- they steer the
+        # controller's mode directly, and its effort rides back on ingest replies.
+        if zone == "SYSTEM" and sensor == "HVAC":
+            if not self.hvac.set_override(action):
+                return False
+            self._broadcast("hvac", {"hvac": self.hvac.state()})
+            self.storage.record_audit(user, f"HVAC_{action}", "SYSTEM.HVAC")
+            self._log(f"AUDIT: {user} set HVAC {action}")
+            return True
         cmd = Command(zone, sensor, action)
         self.source.send_command(cmd)
         if self.demo_source is not None:
@@ -323,7 +361,7 @@ HUB: Hub | None = None
 # --------------------------------------------------------------------------
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
-    server_version = "MuseumGuard"
+    server_version = "Smart Rampart"
 
     def log_message(self, fmt, *args):  # quieter console
         pass
@@ -432,7 +470,14 @@ class Handler(BaseHTTPRequestHandler):
             if not data or "zone" not in data:
                 return self._send_json({"error": "expected JSON with a 'zone'"}, 400)
             cmd = HUB.ingest(data)
-            return self._send_json({"ok": True, "cmd": cmd})
+            # The HVAC effort/mode is a *persistent* level, not a one-shot queued
+            # command, so it rides back on every reply alongside the alarm cmd.
+            zone = config.canonical_zone(data.get("zone", ""))
+            hstate = HUB.hvac.state()
+            return self._send_json({
+                "ok": True, "cmd": cmd,
+                "hvac": HUB.hvac.level_for(zone), "hvacMode": hstate["mode"],
+            })
         self._send_json({"error": "not found"}, 404)
 
     # -- static files -----------------------------------------------------
@@ -478,7 +523,7 @@ class Handler(BaseHTTPRequestHandler):
 
 def main() -> int:
     global HUB
-    parser = argparse.ArgumentParser(description="MuseumGuard web dashboard")
+    parser = argparse.ArgumentParser(description="Smart Rampart web dashboard")
     # localhost by default: the login posts a plaintext password over HTTP, so
     # do not expose this beyond the demo machine without TLS in front of it.
     parser.add_argument("--host", default="127.0.0.1")
@@ -491,6 +536,10 @@ def main() -> int:
                              "building view (49 fake sensors + scripted "
                              "incidents). Off by default: without it every "
                              "reading on the dashboard is a real measurement.")
+    parser.add_argument("--forecast", choices=["sim", "http", "off"], default="sim",
+                        help="HVAC weather feedforward: sim=synthetic outlook "
+                             "(default, offline), http=Open-Meteo (needs internet), "
+                             "off=purely reactive")
     args = parser.parse_args()
 
     # Must happen before Hub(): Storage allocates one ring buffer per sensor.
@@ -499,12 +548,12 @@ def main() -> int:
         print(f"Demo rooms ON -- {added} simulated sensors across "
               f"{len(building.ROOMS) - 1} fictional rooms.")
 
-    HUB = Hub(args.source)
+    HUB = Hub(args.source, args.forecast)
     HUB.start()
     httpd = ThreadingHTTPServer((args.host, args.port), Handler)
     httpd.daemon_threads = True
     print(f"{config.APP_NAME} web dashboard -> http://{args.host}:{args.port}"
-          f"  [source: {args.source}]")
+          f"  [source: {args.source}, forecast: {args.forecast}]")
     print("Press Ctrl+C to stop.")
     try:
         httpd.serve_forever()

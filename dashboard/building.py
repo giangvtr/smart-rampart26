@@ -133,7 +133,7 @@ ROOMS = [
     # -- B1: the real rig lives here -------------------------------------
     Room("B1_ARCHIVE", "Archive & Vault", "B1", 1, 1, 18, 12,
          zones=["BASEMENT"], live=True,
-         note="Live hardware — the physical MuseumGuard rig", style="archive"),
+         note="Live hardware — the physical Smart Rampart rig", style="archive"),
     Room("B1_ROMAN", "Roman Antiquities", "B1", 21, 1, 18, 12,
          sensors=["TEMP", "HUMIDITY", "WATER", "CASE_TILT"], style="antiquities"),
     Room("B1_LOADING", "Loading bay", "B1", 1, 15, 22, 10,

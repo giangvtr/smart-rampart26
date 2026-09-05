@@ -1,4 +1,4 @@
-/* MuseumGuard — the 3D building view, drawn with CSS 3D transforms.
+/* Smart Rampart — the 3D building view, drawn with CSS 3D transforms.
  *
  * Zero dependencies. The museum is ordinary DOM inside a `preserve-3d` scene,
  * so the browser does the projection and we get hit-testing, hover and text

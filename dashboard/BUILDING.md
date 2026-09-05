@@ -12,7 +12,7 @@ render as grey, unmonitored shells and every reading on the dashboard is a real
 measurement. The switch is deliberate — a museum that is 92 % fiction should
 say so rather than imply it.
 
-**The building is a third view, not the landing page.** MuseumGuard opens on
+**The building is a third view, not the landing page.** Smart Rampart opens on
 the Graphs 2x2 for the live rig (Simple on a phone); the **Building / Graphs /
 Simple** switch in the top bar is how you get here, and clicking a room takes
 you back into whichever of Graphs/Simple you last used.
