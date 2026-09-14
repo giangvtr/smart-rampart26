@@ -1,11 +1,4 @@
-// Smart Rampart - MINIMAL test: WiFi + water sensor + dashboard POST + DISARM.
-//
-// Purpose: prove the full round trip, INCLUDING the command that rides back on
-// the POST reply. The node reads the analog water-level sensor every 3s, POSTs
-// it to the dashboard, and turns ON the onboard LED as a local ALARM when the
-// level is high. Clicking DISARM (or "Reset BASEMENT - Water level") on the
-// dashboard queues a command that comes back on the next POST reply and
-// silences the LED. No DHT, no RGB LED, no potentiometer.
+// Smart Rampart - ESP32 Node
 //
 // Setup:
 //   1. ESP32 board package installed (Espressif).
