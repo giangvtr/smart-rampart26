@@ -67,6 +67,8 @@ There are two independent microcontroller roles:
 - Full-screen **fire alert** popup with an *Acknowledge & DISARM* button that silences the node.
 - **Heartbeat watchdog**: a node that stops reporting flips its tiles to **DISCONNECTED** within
   ~6 s instead of showing stale data as if it were live.
+- When a fire is detected, at low percentage, the hvac will be turn on to evacuate air and send dashboard alarm while avoiding redundant false alarm. 
+But when it is higher than 50%, a sound alarm goes off and send pop up noti on dashboard.
 
 **Predictive HVAC automation** (`hvac.py` + `forecast.py`)
 - Turns the temp/humidity stream into a single conditioning **EFFORT** and **MODE**
