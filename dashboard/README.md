@@ -126,11 +126,14 @@ Arduino IDE **or** Wokwi. This is the node tested end to end. It POSTs `water`, 
    | Water-level sensor | signal (S) | **GPIO34** | ADC1, input-only. `VCC`→`3V3`, `GND`→`GND` |
    | Potentiometer (fire index) | wiper | **GPIO35** | ADC1, input-only. Outer legs → `3V3` and `GND` |
    | DHT11/22 temp+humidity | data | **GPIO15** | `DHTPIN` in code. `VCC`→`3V3`, `GND`→`GND`. Add a 10 kΩ data→VCC pull-up if your module has no built-in one |
-   | Water alarm indicator | — | **GPIO2** | Onboard LED; lights on local WATER alarm. No wiring needed |
+   | Alarm indicator | — | **GPIO2** | Onboard LED; lights on local WATER **or** FIRE alarm. No wiring needed |
+   | Alarm buzzer | + leg | **GPIO25** | Active buzzer, shared by WATER and FIRE through the node's own alarm state machine. `GND`→`GND` |
+   | HVAC effort indicator | + leg | **GPIO26** | PWM LED; duty = the live HVAC effort (0..255) riding back on the POST reply. `GND`→`GND` (through a resistor if it's a bare LED) |
 
    - **GPIO34/35 have no internal pull resistor.** If a sensor pin is ever left unconnected, tie
      it to `GND` through a 10 kΩ resistor or the ADC reads floating noise.
-   - Fire has no node LED — the fire alarm is a full-screen popup on the dashboard.
+   - Fire ALARM drives the same node LED/buzzer as water, **and** still triggers the dashboard's
+     full-screen popup — both fire, they are not exclusive.
    - **Pin discrepancy to know about:** the code compiles with `#define DHTPIN 15`, but the header
      comment and the Wokwi `diagram.json` in this repo wire the DHT to **GPIO4** (and the pot to
      D34). The `#define` wins at runtime — so either wire the DHT to **GPIO15**, or change
@@ -139,8 +142,9 @@ Arduino IDE **or** Wokwi. This is the node tested end to end. It POSTs `water`, 
    `POST {...} -> 200` and the `reply:` line.
 
    > **No sensor to hand?** Briefly jumper `3V3 → GPIO34` to force a high water reading (ALARM):
-   > the onboard LED turns on, and clicking DISARM on the dashboard should turn it off within ~3 s.
-   > Turn the potentiometer past ~70 % to raise the fire index and trigger the fire popup.
+   > the onboard LED + buzzer turn on, and clicking DISARM on the dashboard should turn them off
+   > within ~3 s. Turning the potentiometer past ~70 % does the same via the fire channel, and
+   > also raises the dashboard's full-screen fire popup.
 
 **3b. Pico W (Basement water — `WINDOWS/main.py`, MicroPython)**
 
@@ -198,7 +202,7 @@ Within ~2 s the four Basement tiles go live. Then walk the checklist.
 - [ ] **Live values** — temp/humidity update within ~2 s.
 - [ ] **Water flood** — wet the sensor → WATER tile red and **latches** (stays red after drying)
       until a guard Resets it.
-- [ ] **Fire alert** — turn the pot past ~70 → full-screen 🔥 popup; **Acknowledge & DISARM**
+- [ ] **Fire alert** — turn the pot past ~70 → full-screen popup; **Acknowledge & DISARM**
       clears it and silences the node.
 - [ ] **Login gate** — as `viewer` only, the ARM/Reset controls are refused; they unlock after
       the in-page `guard` login.
